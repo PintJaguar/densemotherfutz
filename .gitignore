@@ -1,0 +1,5 @@
+node_modules/
+out/
+# eigene Musik bleibt lokal und außerhalb von Git
+tracks/
+films/*/track.wav
