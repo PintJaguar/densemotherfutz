@@ -1,5 +1,4 @@
 node_modules/
 out/
-# eigene Musik bleibt lokal und außerhalb von Git
+# eigene Musik: Quelldateien bleiben lokal; die Film-Tracks liegen im (privaten) Repo
 tracks/
-films/*/track.wav
