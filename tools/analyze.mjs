@@ -1,7 +1,10 @@
 /**
  * Analyse a finished track into per-frame features a film reads in seek(t).
  *
- *   node analyze.mjs <track.(wav|mp3|flac)> --film ../films/<name> [--fps 30] [--bpm 128]
+ *   node analyze.mjs <track.(wav|mp3|flac)> --film ../films/<name> [--fps 30] [--bpm 128] [--downbeat 0.05]
+ *
+ * --downbeat pins the time (s) of any bar's "one". With a straight four-on-the-floor all
+ * four beats carry the same kick, so the automatic choice is a guess; set it by ear.
  *
  * Writes into the film folder:
  *   track.wav     48 kHz stereo 16-bit copy of the track (render.mjs muxes it)
@@ -20,7 +23,7 @@ import { FFMPEG } from './lib/ffmpeg.mjs';
 const a = args(process.argv.slice(2));
 const src = a._[0];
 if (!src || !a.film) {
-  console.error('usage: node analyze.mjs <track> --film ../films/<name> [--fps 30] [--bpm 128]');
+  console.error('usage: node analyze.mjs <track> --film ../films/<name> [--fps 30] [--bpm 128] [--downbeat 0.05]');
   process.exit(1);
 }
 const FPS = Number(a.fps || 30), SR = 48000, HOP = SR / FPS, N = 4096;
@@ -202,7 +205,9 @@ for (let o = 0; o < 4; o++) {
   for (let t = phase + o * beatLen; t < duration; t += 4 * beatLen) s += (env.kickBand[Math.round(t * FPS)] || 0) + (env.energy[Math.round(t * FPS)] || 0) * 0.2;
   if (s > bestBar) { bestBar = s; bar0 = o; }
 }
-const firstDownbeat = phase + bar0 * beatLen - 4 * beatLen * Math.ceil((phase + bar0 * beatLen) / (4 * beatLen) - 1e-9);
+const db = a.downbeat !== undefined ? Number(a.downbeat) : phase + bar0 * beatLen;
+if (!Number.isFinite(db)) throw Error('--downbeat must be a time in seconds');
+const firstDownbeat = db - 4 * beatLen * Math.ceil(db / (4 * beatLen) - 1e-9);
 
 // ── sections and drops ─────────────────────────────────────────────────────
 // Novelty: distance between the mean band profile of the 8 s before and after

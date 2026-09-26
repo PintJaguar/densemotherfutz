@@ -1,0 +1,251 @@
+# Dense Motherfutz
+
+Track: `tracks/Dense Motherfutz.mp3`, 192,00 s = exakt 104 Takte à 4/4.
+
+```
+node analyze.mjs "../tracks/Dense Motherfutz.mp3" --film ../films/dense-motherfutz --bpm 130 --downbeat 0.054
+```
+
+## Tempo und Raster (gemessen, noch nicht gegengehört)
+
+- **130,00 BPM.** Kammfilter-Fit auf den Tiefpass-Onsets (< 90 Hz, 1 ms Auflösung) über den
+  ganzen Track; Groove und Drop getrennt gefittet ergeben 130,00 und 129,99. Mittlere
+  Abweichung der Kicks vom Raster 5,6 ms. Der Auto-Report sagte 129,09 — falsch, driftet über
+  den Track ~1,3 s.
+- **Takt 1 beginnt bei 0,054 s.** Die Auto-Wahl der „Eins“ lag zwei Schläge daneben (bei
+  gerader Bassdrum sind alle vier Schläge gleich laut). Belegt dadurch, dass mit 0,054 s alle
+  Lautstärkesprünge exakt auf Taktlinien fallen (Takt 17, 61, 73).
+- Takt n beginnt bei `0.054 + (n-1) · 1.8462` s.
+
+## Aufbau
+
+| Takte | Zeit (s) | Teil | Befund |
+|---|---|---|---|
+| 1–8 | 0,05–14,8 | Intro A | Kick allein, blendet ein (sauber, trocken) |
+| 9–16 | 14,8–29,6 | Intro B | Kick gefiltert/weicher, Lowmid kommt, Build ab Takt 16 |
+| 17–40 | 29,6–73,9 | Groove 1 | Voller Sub + Bass. 4-Takt-Muster: Takt 4 jeder Gruppe mit Höhen-Akzent, alle 8 Takte eine Variation |
+| 41–56 | 73,9–103,4 | Groove 2 | Wie Groove 1, aber mehr Mitten/Höhen (neues Element ab Takt 41) |
+| 57–60 | 103,4–110,8 | Übergang | Höhen raus, Vorbereitung auf den Breakdown |
+| 61–72 | 110,8–133,0 | Breakdown | Kick weg; Sub ab Takt 65 (118,2) fast weg; Riser Takt 69–72; Kick-Fill (Achtel) ab Takt 72, Schlag 3 |
+| 73–96 | 133,0–177,3 | Drop | Maximum: Energie ~1,0, Höhen voll |
+| 97–104 | 177,3–192,0 | Schluss | Energie bleibt, Höhen etwas zurück, harter Schluss auf Taktende |
+
+Der Report setzt den Drop auf 131,1 (Takt 72) wegen des Fills; der eigentliche Drop ist
+**133,0 s (Takt 73)**. Im Film den Fill als Anlauf behandeln, den Einschlag auf 133,0.
+
+## Wichtig fürs Bauen: `M.hit('kick')` ist in diesem Track unbrauchbar
+
+Im Groove erkennt der Detektor 200 „Kicks“ auf 176 Schläge, nur 101 davon auf dem Raster; im
+Drop 142 auf 132 Schläge, nur 54 auf dem Raster. Der Rest sind Bassnoten zwischen den Schlägen.
+Weil die Bassdrum gerade durchläuft, die Kick **aus dem Raster ableiten** (jeder Schlag in den
+Takten 1–60 und 73–104, im Breakdown keine, Fill in Takt 72 aus den erkannten Hits) statt aus
+`M.hit('kick')`. Bass-Pumpen dann über `M.val('bass'/'sub')`.
+
+## Konzept: Tiefsee-Abstieg (gewählt 2026-09-25)
+
+Ein kleines Tauchboot sinkt durch den Track. Als Stilreferenz dient ein ChatGPT-Triptychon
+(Konzept 5 in `story-prompts.md`):
+- links: flaches Aqua-Wasser mit Sonar-Ringen, Fischschwärmen, Korallen in Pink/Orange
+  und einem Lichtkegel in Sunflower
+- Mitte: Leere aus Midnight und Indigo, nur Boot, Licht und Blasenspur
+- rechts: eine riesige Qualle in Fluo-Pink/Orange, Druckwellen-Ringe, starke VHS-Streifen
+
+Die Referenz ist Stimmung, keine Vorlage; das Bild muss aus Platten und Raster gebaut werden.
+
+## Gebaut (Stand 2026-09-25, erste Fassung; Takt 41–74 durch Runde 2 ersetzt)
+
+Die Zeitachse ist `PARTS` in `index.html`, abgeleitet aus dem Takt-Raster (`T(n)`), nicht aus
+`M.sections`. Die Kick kommt aus dem Raster (`KICKS`), der Fill in Takt 72 aus den erkannten Onsets.
+Alle Hit-Reaktionen laufen mit einem halben Frame Vorlauf (`LEAD`), damit der Frame reagiert, der dem
+Onset am nächsten liegt. Der Abstieg ist eine tabellierte Scroll-Funktion: pro Teil eine feste Strecke,
+die auf jeder Kick einen Schub bekommt.
+
+| Takte | Teil | Bild | Signale |
+|---|---|---|---|
+| 1–8 | Intro A | Boot treibt an der Oberfläche, Streifensonne sinkt über das ganze Intro, Riff links | Sonar-Ping auf der 1 jedes Takts (Stärke steigt mit dem Einblenden) |
+| 9–16 | Intro B | Boot kippt und taucht ab, Oberfläche scrollt aus dem Bild, Lampe geht an | Sonar auf der 1; jede Kick = Schub |
+| 17–40 | Groove 1 | Aqua-Flachwasser, Korallen (Pink/Orange/Sunflower) an der Felswand, Lichtschächte, Fischschwärme alle 8 Takte | Sonar auf der 1; jede Kick = Schub, Schwarm zuckt zusammen; Bass = Korallen-Schwingen |
+| 41–56 | Groove 2 | Wasser kippt über Blau, Korallen enden, Schwebeteilchen nehmen zu | wie Groove 1, Hats = Funkeln der Schwebeteilchen |
+| 57–60 | Übergang | Keine Lichtschächte, Lampe flackert, Abstieg rast, Tracking-Band | |
+| 61–72 | Breakdown | Leere aus Überdrucken, nur Boot, Lampe, Blasen; Lampe dimmt ab Takt 65; ab Takt 68 rosa Glühen von unten | keine Kick, kein Sonar (auch nicht im Fill); Riser = Glühen + Tracking-Band |
+| 73–80 | Drop | Qualle schlägt ein (Pink-Flash + Chroma + Glitch auf 132,98), Boot wird zur Seite gedrückt, Lampe aus | Kick = Glocke kontrahiert + Druckwellen-Ring; Tentakel laufen dem Puls nach; Tears jeden 4. Takt |
+| 81–88 | Drop | Zwei kleine Quallen kommen dazu, pulsen auf dem Offbeat | Tears auf jedem Takt |
+| 89–96 | Drop | wie oben | Tears auf jedem Takt, stärker |
+| 97–104 | Schluss | Brut steigt weg, Qualle hebt sich, verlässt in Takt 103–104 das Bild; letztes Bild = Boot allein in der Leere | Tears wieder jeden 4. Takt |
+
+Technik: Wasser als fünf Hintergrundplatten (Aqua, Blau, Indigo, Purple, Midnight) in gewellten
+Tonstufen, Mischung über die Tiefe (flach → mittel → tief). Alles Helle (Sonne, Korallen, Boot, Ringe,
+Blasen, Schwebeteilchen, Tentakel) wird aus allen Hintergrundplatten auf Papier geknockt und dann
+gedruckt. Blau liegt auf demselben Rasterwinkel wie Aqua: auf verschiedenen Winkeln erzeugten die
+beiden ein grobes Rautenmoiré (per Test belegt: Aqua allein sauber, ohne VHS weiterhin Moiré).
+
+## Geprüft
+
+- `verify.mjs` (Chromium): seek rein über die ganze Länge, Vertrag hält.
+- Kontaktbögen bei 1–192 s angesehen, 1:1-Bilder bei 50, 95 und 150 s.
+- Frame-Streifen 132,87–133,17 s: Flash und Glitch sitzen auf dem Einschlag-Frame.
+- `out/dense-motherfutz-0-30.mp4`: 0–30 s, 900 Frames, 1080², AAC-Ton aus `track.wav`. Gerendert
+  in drei parallelen 10-s-Stücken, per ffmpeg verkettet und gemuxt.
+- Nicht geprüft: Timing mit Ton durch mich (ich kann das Video nicht abspielen), 30–192 s als Video.
+
+## Änderungen
+
+- 2026-09-25 (Nutzer): Sonar nur noch auf der 1 jedes Takts und langsamer: 250 px/s statt 520,
+  Lebensdauer 1,6 Takte, so überlappen immer zwei Ringe. Die Druckwellen der Qualle im Drop
+  bleiben auf jeder Kick.
+
+## Nächste Runde (Nutzer-Feedback 2026-09-26; umgesetzt, siehe „Runde 2“)
+
+Umfang: **nur Takt 1–72 (bis zum Drop)** überarbeiten und rendern; Drop und Schluss bleiben.
+
+1. **Sonar auf die 2,5:** Ping auf der Achtel nach Schlag 2 jedes Takts
+   (`T(bar) + 1.5 * BEAT`), nicht mehr auf der 1. Eigene Ping-Liste statt `k.down` in `rings()`.
+2. **Zwei Stellen werden für mehrere Sekunden fast schwarz**: die erste um 0:49 (≈ Takt 27), die
+   zweite später. Ursache unbekannt. Erst messen: Kontaktbogen 46–54 s im Abstand von 0,5 s, dann
+   die zweite Stelle suchen (Kontaktbogen über 30–133 s im Abstand von 2 s). Verdacht erst danach.
+3. **Lichtschächte fest an der Oberfläche/Welt**, sie dürfen nicht mit dem Boot mitwandern:
+   `shafts()` hängt an `st.surf`/Bildschirm, muss an Welt-y (Scroll) gebunden werden und mit der
+   Tiefe ausblenden.
+4. **Dramaturgie bis zum Drop:** Das Meer wird immer dunkler, aber die Unterwasserwelt wird
+   dabei immer mystischer und leuchtender. Es kommen immer mehr Fischschwärme in fantastischen
+   Formen und Leuchtfarben (Fluo auf Papier geknockt, nicht dunkle Silhouetten). Vor dem Drop
+   kurz ganz dunkel, die Bootslampe fällt flackernd aus. Dann kommt die Qualle.
+5. **Probe-Renders in niedriger Auflösung** (vom Nutzer gewünscht, gern unter 720). Es reicht
+   nicht, bei `render.mjs --size` nur den Screenshot zu verkleinern: gezeichnet wird weiter in
+   1080, und das verkleinerte Raster erzeugt Moiré. Nötig ist eine echte Zeichen-Skalierung in
+   der Film-HTML, etwa ein Query-Parameter, der `OUT` bzw. `K` und alle festen 1080-Annahmen
+   (`fastBandPass`, `vhs`, `inkPass`-Scratch) mitskaliert. Sonst eine eigene Preview-Option im
+   Tool, aber nur nach Rückfrage (`tools/`).
+
+## Runde 2 (2026-09-26): umgesetzt für Takt 1–72 (Blackout und Verscheuchen durch Runde 3 ersetzt)
+
+1. **Sonar auf der 2,5:** eigene Liste `PINGS` (`T(bar) + 1.5 * BEAT`, Takte 1–60), `rings()` liest
+   Ping- statt Kick-Liste. Die Druckwellen der Qualle bleiben auf jeder Kick des Drops.
+2. **Die dunklen Stellen waren ein Render-Artefakt, keine Szene.** Gemessen (mittlere Helligkeit
+   des alten `out/dense-motherfutz.mp4` alle 0,5 s): hell bis 48,5 s, ab 49,0 s Luma ~20 bis 64,0 s,
+   ebenso 80,5–96,0 und 115–128 s. Alle drei Strecken enden exakt an einer 32-s-Stückgrenze (64, 96,
+   128), ein dunkles Bild zeigt die Tinten ohne Papier auf dem Seitenhintergrund. `seek()`-Stills
+   derselben Zeiten sind hell, und ein Einzelprozess über 720 Frames ab 32 s blieb hell, ohne
+   `contextlost`. **Hypothese (nicht belegt):** Bei drei parallelen 1080-Prozessen verliert Chromium
+   unter Speicherdruck die GPU-Canvases, und das einmal gebackene Papier bleibt leer bis zum
+   Prozessende. Abhilfe: Papier liegt als `ImageData` im JS-Speicher und wird pro Frame per
+   `putImageData` gesetzt; Rasterkacheln werden bei verlorenem Kontext neu gebaut. Beim nächsten
+   Voll-Render die Luma-Messung wiederholen:
+   `ffmpeg -i x.mp4 -vf "fps=2,scale=64:64,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-" -an -f null -`
+3. **Lichtschächte in Weltkoordinaten:** sie hängen an `st.surf`, reichen `SHAFT_LEN` = 1800 px in die
+   Tiefe und heben das Wasser in sechs Tiefenscheiben immer weniger an. Sie scrollen mit dem Abstieg
+   weg (ab ~42 s aus dem Bild).
+4. **Dramaturgie bis zum Drop** (nach Nutzer-Idee: Schwarm wie in `reference/films/roost`):
+   - Das Meer dunkelt durchgehend: `dm` 0 → 0,45 (Groove 1) → 0,8 (Groove 2) → 1 (Übergang) → 1,35
+     (Breakdown, neue vierte Wasserstufe „Abyss“) → 1,75 in Takt 72. Drop und Schluss bleiben bei 1.
+   - Dunkle Silhouetten-Schwärme nur noch in Groove 1 (Takt 17, 25, 33).
+   - **Biolumineszenter Schwarm** (`schoolAt`): 1500 Fische auf einer dünnen, sich verwindenden
+     Fläche (Modell aus roost: Twist, Biegung, Lappen, alles analytisch in t). 16 Gruppen schwimmen ab
+     Takt 41 von den Seiten ein und schließen sich von der Mitte her an (bis ~Takt 64). Jeder Fisch
+     ist ein kurzer Strich in Schwimmrichtung, aus allen Wasserplatten geknockt und in Aqua gedruckt;
+     Rückgrat Sunflower, Enden Pink. Zwei Hof-Bänder heben das Wasser um die Fische an (Glow). Kick:
+     Schwarm zuckt zusammen. Takt 65–66: Schwarm wird zum geneigten Ring ums Boot, ab Takt 68 dreht
+     der Riser ihn schneller.
+   - **Blackout:** ab Takt 71, Schlag 3 gehen die Lichter wellenweise und stotternd aus (bis ~131,5 s),
+     die Lampe flackert in Takt 72, Schlag 1–2 aus, das Boot wird zum Schatten. Von ~132,0 bis
+     133,0 s ist es fast ganz dunkel. Das rosa Riser-Glühen von unten und das Aufsteigen der Qualle im
+     Fill sind entfernt; die Qualle erscheint erst auf 133,0.
+   - **Verscheuchen:** Auf dem Einschlag leuchten die Fische wieder auf und stieben radial von der
+     Qualle weg, über zwei Takte (73–74). Das ist die einzige Änderung im Drop.
+5. **Probe-Renders in niedriger Auflösung:** `index.html?res=540` zeichnet nativ in 540 (K = res/1080).
+   Layout bleibt in 1080-Koordinaten; Pixelarbeit (Raster, Scratch-Platten, `fastBandPass`, `vhs`,
+   Registerversatz) läuft in OUT. Rasterweite `max(4, 4,6·K)`: bei 3 px gab es zu wenige Tonstufen,
+   das Wasser zerfiel in Stufen. Mit 4 px stimmt der Ton mit 1080 überein, die Punkte sind relativ
+   gröber. Render mit Ton: `probe.mjs` im Filmordner (aus `tools/` starten, `tools/` bleibt unverändert):
+   `node ../films/dense-motherfutz/probe.mjs --from 0 --to 137 --res 540 --jobs 3`
+   → `out/dense-motherfutz-probe-0-137-540.mp4`. Stills: `shoot.mjs … --size 540 --query res=540`.
+
+Geprüft in Runde 2:
+- `verify.mjs` (Chromium): seek rein, Vertrag hält.
+- Stills 540 und 1080 bei 5–134,5 s, 1:1-Ausschnitte bei 100 und 112 s.
+- Probe `out/dense-motherfutz-probe-0-137-540.mp4`: 137,00 s, 540², 30 fps, AAC 48 kHz; 726 s mit drei
+  Prozessen (~0,35 s/Frame pro Prozess). Mittlere Helligkeit alle 0,5 s: 114 im Intro, 139 bei 28 s
+  (Flachwasser), fällt stetig auf 99 (72 s), 89 (90 s), 59 (Breakdown), 43 bei 132–132,5 s (Blackout),
+  79–85 ab 133,0 (Drop). Keine Einbrüche.
+- Nicht geprüft: Timing mit Ton (ich kann das Video nicht abspielen); ob der Schwarm in Bewegung als
+  Schwarm liest, habe ich nur auf Einzelbildern gesehen.
+
+Nebenbei gefunden und behoben:
+- Harte Horizontlinie im Wasser (z. B. 100 s, y ≈ 540) trotz nur 2/255 Deckungsunterschied: Viele
+  Pixel einer Rasterkachel teilen denselben Schwellwert, deshalb kippt ein Ring pro Punkt auf einmal.
+  `fastBandPass` hat jetzt ein festes, leinwandverankertes Schwellen-Jitter von ±4 Stufen (`JIT`). Dazu
+  10 statt 6 Wasserstreifen.
+- Lampenkegel druckte im Tiefwasser braun (Sunflower über Überdruck): die fernen Bänder blenden mit der
+  Tiefe aus. Die Lampe dimmt ab Takt 65 nicht mehr, sie fällt erst in Takt 72 aus.
+
+## Runde 3 (2026-09-26, Nutzer-Feedback auf den Probe): ganzer Film
+
+Ersetzt Blackout und Verscheuchen aus Runde 2 und den alten Drop/Schluss.
+
+- **Sonar nur im Wasser:** `rings()` clippt die Pings auf `belowSurface` (sichtbar im Intro).
+- **Kein Schwarz vor dem Drop:** Lichter, Lampe und Boot bleiben an; der Ring um das Boot leuchtet bis
+  133,0. `dm` endet im Breakdown bei 1,35 (kein Absacken in Takt 72).
+- **Einschwimmen auf den Beat, organisch:** Pro Takt startet ab Takt 41 eine Gruppe auf dem Downbeat
+  (16 Gruppen, Mitte zuerst, bis Takt 58). Der Fortschritt läuft auf `pulseProg` (Zeit, die auf jeder Kick
+  schneller läuft, tabelliert wie `SCROLL`), also schwimmt die Gruppe in Schüben auf der Kick. Jede Gruppe
+  kommt von einem eigenen Punkt rings um das Bild (Goldener Winkel) auf einer Bézier-Kurve, deren Ende der
+  lebende Platz auf der Fläche ist. Jeder Fisch hängt um `SLAG` hinterher, dadurch zieht die Gruppe als
+  Band ein und fließt in den Schwarm, statt seitlich „anzukleben“.
+- **Einzelwesen beim Abtauchen:**
+  - Manta, Takt 21–28: dunkle Silhouette im Flachwasser, Flügelschlag über zwei Takte, Bass vergrößert ihn.
+  - Anglerfisch, Takt 45–52: lauert von rechts, Maul auf und zu, Zähne auf Papier. Die Sunflower-Angel
+    pulsiert auf der Kick und flammt auf jedem Downbeat auf.
+  - Staatsqualle (Siphonophore), Takt 55–62: Perlenkette in Aqua/Pink schlängelt quer durchs Bild, auf
+    jedem Schlag läuft eine Lichtwelle vom Kopf die Kette hinunter.
+  - Rippenquallen, Takt 61–71: drei durchscheinende Körper, Kammreihen in Aqua/Pink/Sunflower, das Licht
+    läuft die Reihen hinunter, schneller mit den Höhen.
+- **Drop und Schluss (neu):**
+  - 133,0: Pink-Flash, die Qualle schießt mit 20 % Größe von unten in den Ring.
+  - Takt 73–92: Sie jagt den Schwarm (der auf einer Schleife flieht, die Qualle folgt ihr mit 1,4 s
+    Verzug und stößt auf jede Kick vor). Um die Qualle öffnet sich eine Lücke im Schwarm. Auf jedem
+    Downbeat von Takt 74 bis 96 lösen sich Fische und stieben davon, bis der Schwarm weg ist.
+  - Wachstum: +10 Prozentpunkte auf dem Downbeat jedes vierten Takts (77, 81, 85, 89, 93, 97:
+    20 → 80 %), mit kurzem Nachfedern (`settle`). „10 %“ als Prozentpunkte gelesen; ×1,1 alle vier Takte
+    hätte am Ende nur ~35 % ergeben.
+  - Takt 93–96: Die Qualle wendet sich dem Boot zu und richtet sich auf; Takt 97 (177,3 s) schließt
+    sich die Glocke um das Boot.
+  - Takt 97–98: Kamera fliegt mit hinein. `CAM` (Zoom 1 → 12 um die Bootsposition) wirkt auf alle
+    Platten; das Boot und sein Lampenkegel werden in Bildschirmkoordinaten gezeichnet und behalten ihre
+    Größe. Raster bleiben an der Leinwand, der Zoom lässt die Punkte nicht mitwachsen.
+  - Takt 99–104: im Inneren der Glocke. Pinkes Gewebe mit violettem Rand, acht Radialkanäle und
+    Ringkanal in Florange, vier Gonaden in Sunflower auf Papier, 120 verschluckte Fische kreisen, das
+    Boot schwebt mit Lampe in der Mitte. Die Wände ziehen sich auf jeder Kick zusammen. Das Innere
+    öffnet sich aus dem Zoom (startet 2,6× zu groß und bremst über Takt 99 ab).
+  - Die zwei kleinen Quallen ab Takt 81 und das Wegsteigen der Qualle sind entfernt.
+- **Alter Fehler behoben:** `jellyRim` schaltete mitten im Band auf `source-over` und radierte das
+  0,55-Pink der Glocke weg: Die Glocke war innen immer Papier. Jetzt ein Even-odd-Ring ohne Compositing.
+
+## Voll-Render (2026-09-26)
+
+`out/dense-motherfutz.mp4`: 192,00 s, 5760 Frames, 1080², H.264 + AAC. In sechs 32-s-Stücken
+gerendert, per ffmpeg verkettet und mit `track.wav` gemuxt. Sechs parallele Prozesse liefen auf
+diesem Rechner (i5-1135G7, 16 GB) in „Out of memory“ bei ImageData; mit wiederverwendetem
+Plattenpuffer und drei Prozessen liefen die Stücke durch (~18 min pro 32 s bei drei parallel).
+Ton: −8,8 LUFS, True Peak +4,7 dBFS im MP4. Schon die Quelle `track.wav` hat +1,3 dBFS True Peak,
+AAC hebt das weiter an. Der Master ist nicht angefasst.
+
+## Render-Kosten
+
+Erster Voll-Render brach nach ~1 h bei Frame 2041 ohne Meldung ab (Exit 4, Ursache unbekannt), bei
+~1,8 s/Frame. Gemessen: `bandPass` war 70–90 % der Zeit (pro Band mehrere Vollbild-Composites).
+`fastBandPass` rastert jetzt eine Deckungskarte pro Platte in einem Pixel-Durchlauf (gleiche
+Rasterkachel wie `screenCoverage`, aber stufenlos statt in 1/16-Schritten). Kleine Pässe bleiben
+bei `inkPass`, leere Pässe werden übersprungen. Stand: ~1,2–1,6 s Zeichnen + ~0,9 s Screenshot pro
+Frame; drei parallele Prozesse brauchen ~14 min für 30 s Film. Der volle Film läuft deshalb in
+Stücken, nicht in einem Prozess.
+
+## Schwächen / nächste Schritte
+
+- Intro A steht 15 s fast still (nur Ringe, sinkende Sonne).
+- Halo um die Qualle sind harte konzentrische Scheiben; die Innenseite der Glocke ist flach.
+- Fischschwärme klein und selten; Groove 2 unterscheidet sich vor allem durch Farbe.
+- Kein Snare-Einsatz: der Detektor liefert keinen sauberen Backbeat (Treffer auf Achteln verteilt).
+
+## Offen
+
+- Gegen das Gehör prüfen: Drop auf 133,0? Gruppe ab Takt 41 wirklich ein neues Element?
