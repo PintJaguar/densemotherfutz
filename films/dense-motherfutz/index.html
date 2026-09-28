@@ -1125,7 +1125,7 @@ const wallX = wy => 150 + 70 * Math.sin(wy * 0.0037 + 1) + 34 * Math.sin(wy * 0.
 
 /* Reef on the wall: branching corals, sea fans and brain corals in four fluo inks, glowing tips in
    sunflower. Built once in world space.                                                         */
-const CORAL_INKS = ['pink', 'florange', 'sunflower', 'pink', 'aqua'];
+const CORAL_INKS = ['pink', 'orange', 'sunflower', 'pink', 'orange'];   // orange prints on both plates
 const CORALS = (() => {
   const r = rngFor('coral'), out = [];
   for (let wy = SURF0 + 160; wy < CORAL_END; wy += 45 + r() * 55) {
@@ -1157,17 +1157,17 @@ const FISHES = (() => {
   const r = rngFor('fishfield'), out = [];
   for (let i = 0; i < 38; i++) {
     const L = 24 + 76 * r() ** 1.7, dur = (8 + 10 * r()) * (1.3 - L / 160);
-    out.push({ t0: T(13) + r() * (T(44) - T(13) - dur), dur, L, dir: r() < 0.5 ? -1 : 1, y0: (0.18 + 0.74 * r()) * H, ph: r() * TAU, wag: 7 + 5 * r() });
+    out.push({ t0: T(13) + r() * (T(44) - T(13) - dur), dur, L, dir: r() < 0.5 ? -1 : 1, y0: (0.18 + 0.74 * r()) * H, ph: r() * TAU, wag: 7 + 5 * r(), i });
   }
   return out;
 })();
 function fishAt(f, st) {
   const u = (st.t - f.t0) / f.dur; if (u <= 0 || u >= 1) return null;
   const x = f.dir > 0 ? lerp(-160, W + 160, u) : lerp(W + 160, -160, u);
-  return { x: x + f.dir * 14 * st.kick, y: f.y0 - (st.S - scrollAt(f.t0)) * 0.25 + 22 * Math.sin(st.t * 0.5 + f.ph), L: f.L, dir: f.dir, wag: Math.sin(st.t * f.wag + f.ph) };
+  return { x: x + f.dir * 14 * st.kick, y: f.y0 - (st.S - scrollAt(f.t0)) * 0.25 + 22 * Math.sin(st.t * 0.5 + f.ph), L: f.L, dir: f.dir, wag: Math.sin(st.t * f.wag + f.ph), i: f.i };
 }
-function fishSil(g, x, y, L, dir, wag) {                 // side view: body, forked tail, dorsal and pectoral fins
-  const P = (u, v) => [x + dir * u * L, y + v * L];
+function fishSil(g, x, y, L, dir, wag, key = 0) {        // side view: body, forked tail, dorsal and pectoral fins
+  const w = makeWob(rngFor('fishcut' + key), 3), P = (u, v) => [x + dir * u * L, y + (v + 0.035 * w(u * 9 + v * 5)) * L];   // hand-cut, not ruled
   const pts = [[0.5, 0], [0.38, -0.12], [0.1, -0.2], [-0.2, -0.15], [-0.36, -0.05], [-0.58, -0.22 + wag * 0.06], [-0.5, 0.0], [-0.58, 0.22 + wag * 0.06], [-0.36, 0.05], [-0.2, 0.13], [0.1, 0.17], [0.38, 0.1]];
   pts.forEach(([u, v], i) => { const [px, py] = P(u, v); i ? g.lineTo(px, py) : g.moveTo(px, py); }); g.closePath();
   const d = [[0.12, -0.18], [-0.02, -0.34], [-0.14, -0.16]]; d.forEach(([u, v], i) => { const [px, py] = P(u, v); i ? g.lineTo(px, py) : g.moveTo(px, py); }); g.closePath();
@@ -1203,7 +1203,8 @@ const SU = new Float32Array(NSCH), SV = new Float32Array(NSCH), SW = new Float32
 const SJF = new Float32Array(NSCH * 3), SJP = new Float32Array(NSCH * 3), SSZ = new Float32Array(NSCH);
 const SINK = new Uint8Array(NSCH), SGRP = new Uint8Array(NSCH), SLAG = new Float32Array(NSCH), SOX = new Float32Array(NSCH), SOY = new Float32Array(NSCH);
 const SLEAVE = new Float32Array(NSCH), SLJ = new Float32Array(NSCH);
-const SCH_INKS = ['aqua', 'sunflower', 'pink'];
+const SCH_INKS = ['blue', 'sunflower', 'pink'];
+const SCH_COV = { blue: 0.42, sunflower: 1, pink: 1 };   // blue fish print as a pale tint on their paper
 const GSTART = new Float32Array(NGR), GENT = [], GCURL = new Float32Array(NGR);
 (() => {
   const r = rngFor('school');
@@ -1336,8 +1337,8 @@ function jellyAt(t) {
 /* Confetti: the riso grain of the reference. Specks of every fluo ink, paper-white and dark ink,
    drifting with the water at three parallax depths; they twinkle, and a share flares on the hats.
    Anchored to the world (not reseeded per frame), so the grain moves with the sea, never crawls. */
-const SPECK_TILE = H + 600, SPECK_INKS = ['aqua', 'pink', 'sunflower', 'white', 'white', 'dark'];
-const SPECKS = (() => { const r = rngFor('specks'), n = Math.round(4200 * YS); return Array.from({ length: n }, () => ({ x: r() * W, y: r() * SPECK_TILE, par: 0.5 + r() * 0.9, sz: 1 + r() * r() * 3, ink: SPECK_INKS[Math.floor(r() * SPECK_INKS.length)], ph: r() * TAU, f: 1 + r() * 3, gate: r() })); })();
+const SPECK_TILE = H + 600, SPECK_INKS = ['white'];
+const SPECKS = (() => { const r = rngFor('specks'), n = Math.round(420 * YS); return Array.from({ length: n }, () => ({ x: r() * W, y: r() * SPECK_TILE, par: 0.5 + r() * 0.9, sz: 1 + r() * r() * 3, ink: SPECK_INKS[Math.floor(r() * SPECK_INKS.length)], ph: r() * TAU, f: 1 + r() * 3, gate: r() })); })();
 function specksPath(g, st, ink) {
   const deep = clamp(st.dm, 0, 1.4), vis = 0.55 + 0.45 * Math.min(1, deep);   // denser as the water darkens
   g.beginPath();
@@ -1365,10 +1366,11 @@ function mantaAt(t) {
 }
 function mantaShape(g, m) {
   g.save(); g.translate(m.x, m.y); g.rotate(m.rot); g.scale(1.3, 1.3);
-  const S = 150 * (1 - 0.2 * Math.abs(m.flap)), tx = -25 + 50 * m.flap;
-  g.beginPath(); g.moveTo(80, 0);
-  g.bezierCurveTo(60, -36, tx + 70, -S * 0.75, tx, -S); g.bezierCurveTo(tx - 25, -S * 0.7, -40, -40, -55, -10);
-  g.lineTo(-55, 10); g.bezierCurveTo(-40, 40, tx - 25, S * 0.7, tx, S); g.bezierCurveTo(tx + 70, S * 0.75, 60, 36, 80, 0); g.fill();
+  const S = 160 * (1 - 0.18 * Math.abs(m.flap)), tx = -20 + 45 * m.flap, tw = 8 * Math.sin(m.t * 0.9);
+  g.beginPath(); g.moveTo(86, 0);                        // convex leading edge to a swept tip, concave trailing edge
+  g.quadraticCurveTo(58, -S * 0.62, tx, -S); g.quadraticCurveTo(tx - 4 + tw, -S * 0.42, -44, -15); g.lineTo(-54, 0);
+  g.lineTo(-44, 15); g.quadraticCurveTo(tx - 4 - tw, S * 0.42, tx, S); g.quadraticCurveTo(58, S * 0.62, 86, 0);
+  g.closePath(); g.fill();
   g.beginPath(); g.ellipse(90, -15, 17, 6, -0.5, 0, TAU); g.fill(); g.beginPath(); g.ellipse(90, 15, 17, 6, 0.5, 0, TAU); g.fill();   // cephalic fins
   g.lineWidth = 5; g.lineCap = 'round'; g.beginPath(); g.moveTo(-50, 0); g.quadraticCurveTo(-150, 14 * Math.sin(m.t * 2), -280, 24 * Math.sin(m.t * 2 + 1)); g.stroke();
   g.restore();
@@ -1408,7 +1410,7 @@ function siphAt(t) {
   const bar = barOf(t), tb = T(bar) + Math.floor((t - T(bar)) / BEAT) * BEAT, front = (t + LEAD - tb) * 42, beads = [];
   for (let k = 0; k < 26; k++) {
     const [x, y] = head(t - k * 0.32), b = 0.25 + 0.75 * Math.exp(-((k - front) ** 2) / 5);
-    beads.push({ x, y, r: (13 - k * 0.25) * (0.85 + 0.25 * b), b, ink: k % 2 ? 'pink' : 'aqua' });
+    beads.push({ x, y, r: (13 - k * 0.25) * (0.85 + 0.25 * b), b, ink: k % 2 ? 'pink' : 'sunflower' });
   }
   return beads;
 }
@@ -1420,7 +1422,7 @@ function combsAt(t) {
 // The creatures' lights as one list of dots {x, y, r, ink}; their translucent bodies as ghosts.
 function creatureLights(st) {
   const out = [], ghosts = [], t = st.t;
-  if (st.angler) out.push({ x: st.angler.lx, y: st.angler.ly, r: st.angler.lr, ink: 'sunflower' }, { x: st.angler.x - 72, y: st.angler.y - 32, r: 7, ink: 'aqua' });
+  if (st.angler) out.push({ x: st.angler.lx, y: st.angler.ly, r: st.angler.lr, ink: 'sunflower' }, { x: st.angler.x - 72, y: st.angler.y - 32, r: 7, ink: 'pink' });
   for (const b of st.siph || []) { if (b.b > 0.55) out.push(b); else ghosts.push({ x: b.x, y: b.y, rx: b.r, ry: b.r, rot: 0 }); }
   const speed = 1.2 + 1.6 * M.val('high', t);
   for (const c of st.combs) {
@@ -1489,7 +1491,7 @@ const plateImg = plateX.createImageData(OUTW, OUTH), plate32 = new Uint32Array(p
 const TH255 = {};
 // Many pixels of a screen tile share one threshold, so a smooth ramp flips whole rings at once and
 // prints hard lines. A fixed per-pixel jitter, anchored to the canvas, breaks them up into grain.
-const JIT = (() => { const r = rngFor('jitter'), j = new Int8Array(OUTW * OUTH); for (let i = 0; i < j.length; i++) j[i] = Math.round((r() + r() - 1) * 34); return j; })();
+const JIT = (() => { const r = rngFor('jitter'), j = new Int8Array(OUTW * OUTH); for (let i = 0; i < j.length; i++) j[i] = Math.round((r() + r() - 1) * 8); return j; })();
 function th255(name) {
   if (!TH255[name]) { const sc = screenOf(name), t = new Uint8Array(sc.S * sc.S); for (let i = 0; i < t.length; i++) t[i] = Math.min(255, Math.round(sc.th[i] * 255)); TH255[name] = { S: sc.S, t }; }
   return TH255[name];
@@ -1723,7 +1725,7 @@ function bellPath(g, st, scale) {                      // dome with a scalloped 
   const cx = st.jx, cy = st.jy;
   g.moveTo(cx - wx, cy);
   g.bezierCurveTo(cx - wx, cy - hy * 1.25, cx + wx, cy - hy * 1.25, cx + wx, cy);
-  for (let k = 8; k > 0; k--) { const x1 = cx - wx + (k - 0.5) * 2 * wx / 8, x0 = cx - wx + (k - 1) * 2 * wx / 8; g.quadraticCurveTo(x1, cy + 34 + 10 * pulse, x0, cy); }
+  for (let k = 8; k > 0; k--) { const x1 = cx - wx + (k - 0.5) * 2 * wx / 8, x0 = cx - wx + (k - 1) * 2 * wx / 8; g.quadraticCurveTo(x1, cy + (26 + 14 * ((k * 0.618) % 1)) * scale / 1 + 10 * pulse + 4 * Math.sin(st.t * 1.3 + k), x0, cy); }
   g.closePath();
 }
 function jellyBell(g, st, scale = 1) { g.beginPath(); bellPath(g, st, scale); g.fill(); }
@@ -1780,7 +1782,7 @@ function jellySil(g, st) { jellyBell(g, st); tentacles(g, st); oralArms(g, st); 
 function brights(g, st) {
   g.strokeStyle = g.fillStyle = '#000';
   sun(g, st); glints(g, st); coral(g, st); subRim(g, st); subWindow(g, st); subLampDot(g, st); subStripe(g, st); bubbles(g, st);
-  ['aqua', 'pink', 'sunflower', 'white'].forEach(ink => specksPath(g, st, ink));
+  specksPath(g, st, 'white');
   rings(g, st, false); rings(g, st, true);
 }
 
@@ -1789,16 +1791,17 @@ function brights(g, st) {
 // Shallow is a near-white cyan over a saturated blue floor; deep is blue + indigo + purple, violet
 // rather than grey; the abyss closes it further, still an overprint, never black.
 SCREEN.blue = { a: 3, b: 1 };                            // on aqua's angle: two waters on different angles beat into a diamond moiré
+// Four inks, as in reference/films/roost: blue and indigo carry the sea, pink turns the deep violet
+// and the dusk purple, sunflower is the light; orange is pink over sunflower.
 const WATER = {
-  aqua:     [[0.55, 0.95], [0.8,  0.7],  [0.14, 0.06], [0.05, 0.02]],
-  blue:     [[0.18, 0.72], [0.55, 0.85], [0.6,  0.5],  [0.45, 0.38]],
-  indigo:   [[0.0,  0.12], [0.1,  0.4],  [0.8,  0.92], [0.9,  0.97]],
-  purple:   [[0.0,  0.04], [0.04, 0.16], [0.42, 0.55], [0.55, 0.65]],
-  midnight: [[0.0,  0.0],  [0.0,  0.0],  [0.04, 0.1],  [0.12, 0.2]],
+  blue:   [[0.2,  0.62], [0.5,  0.78], [0.6,  0.5],  [0.48, 0.4]],
+  indigo: [[0.0,  0.08], [0.08, 0.3],  [0.62, 0.8],  [0.8,  0.9]],
+  pink:   [[0.0,  0.0],  [0.0,  0.04], [0.16, 0.26], [0.26, 0.34]],
 };
-const SKY = { aqua: 0, blue: 0.3, midnight: 0.1, purple: 0.85, indigo: 0.75 };
-const ROCK = { aqua: 0.2, blue: 0.55, midnight: 0.15, purple: 0.85, indigo: 0.8 };
-const SUBDARK = { aqua: 0.25, blue: 0.7, midnight: 0.55, purple: 0.6, indigo: 0.92 };
+const SEA_PLATES = Object.keys(WATER);
+const SKY = { blue: 0.25, indigo: 0.72, pink: 0.5 };
+const ROCK = { blue: 0.6, indigo: 0.85, pink: 0.3 };
+const SUBDARK = { blue: 0.7, indigo: 0.95, pink: 0.3 };
 function waterCov(name, y, dm) {
   const w = WATER[name], at = d => lerp(w[d][0], w[d][1], y);
   return dm < 0.5 ? lerp(at(0), at(1), dm * 2) : dm < 1 ? lerp(at(1), at(2), dm * 2 - 1) : lerp(at(2), at(3), clamp(dm - 1, 0, 1));
@@ -1812,8 +1815,8 @@ function backgroundPlate(name, st) {
   bands.push({ lift: 1, draw: g => shafts(g, st, true) });
   bands.push({ coverage: ROCK[name] * (0.85 + 0.15 * dm1), draw: g => wall(g, st) });
   bands.push({ coverage: Math.min(1, ROCK[name] * (0.85 + 0.15 * dm1) + 0.12), draw: g => wallLedges(g, st) });
-  for (const f of st.fish) bands.push({ over: (f.L > 55 ? 0.62 : 0.36) * (1 - 0.5 * dm1) * (name === 'aqua' ? 0.5 : 1), draw: g => { g.beginPath(); fishSil(g, f.x, f.y, f.L, f.dir, f.wag); g.fill(); } });
-  if (st.manta) bands.push({ over: 0.6 * (name === 'aqua' ? 0.5 : 1), draw: g => mantaShape(g, st.manta) });
+  for (const f of st.fish) bands.push({ over: (f.L > 55 ? 0.62 : 0.36) * (1 - 0.5 * dm1) * (name === 'pink' ? 0 : 1), draw: g => { g.beginPath(); fishSil(g, f.x, f.y, f.L, f.dir, f.wag, f.i); g.fill(); } });
+  if (st.manta) bands.push({ over: name === 'pink' ? 0 : 0.6, draw: g => mantaShape(g, st.manta) });
   if (st.angler) {                                        // a shade darker than the water, the mouth darker still
     bands.push({ over: 0.4, draw: g => anglerBody(g, st.angler) });
     bands.push({ over: 0.7, draw: g => anglerMouth(g, st.angler) });
@@ -1831,7 +1834,7 @@ function backgroundPlate(name, st) {
   if (st.jel) {                                           // the jelly's glow opening the water, then its body
     bands.push({ lift: 1, draw: g => jellies(g, st, (g, s) => { glowFill(g, s.jx, s.jy - 80, 820, 0.7, 0.4); g.beginPath(); g.arc(s.jx, s.jy - 80, 820, 0, TAU); g.fill(); }) });
     bands.push({ coverage: 0, draw: g => jellies(g, st, jellySil) });
-    bands.push({ coverage: name === 'purple' ? 0.22 : name === 'blue' ? 0.12 : 0, draw: g => jellies(g, st, jellyBell) });
+    bands.push({ coverage: name === 'indigo' ? 0.2 : name === 'blue' ? 0.12 : 0, draw: g => jellies(g, st, jellyBell) });
   }
   const sc = st.school;
   if (sc) {                                               // the school's glow: lifted halos, then the fish on paper
@@ -1840,7 +1843,6 @@ function backgroundPlate(name, st) {
     bands.push({ coverage: 0, draw: g => schoolPath(g, sc, -1, 1) });
   }
   bands.push({ coverage: SUBDARK[name], draw: g => subBody(g, st) });
-  if (name === 'indigo' || name === 'purple') bands.push({ over: 0.9, draw: g => specksPath(g, st, 'dark') });
   bands.push({ coverage: 0, draw: g => brights(g, st) });
   fastBandPass(ctx, name, {}, bands);
 }
@@ -1851,10 +1853,9 @@ function interiorPlates(st) {
   const lamp = [{ lift: 0.45 * st.lamp, draw: g => beam(g, st, 1, 1.5, 950) }, { lift: 0.8 * st.lamp, draw: g => beam(g, st, 1, 0.7, 700) }];
   const hull = c => ({ coverage: c, draw: g => subBody(g, st) });
   fastBandPass(ctx, 'pink', {}, [{ coverage: 0.58, draw: all }, ...lamp, { lift: 0.4, draw: g => schoolPath(g, sc, -1, 2.2) }, hull(0.4), { coverage: 0, draw: knock }]);
-  fastBandPass(ctx, 'purple', {}, [{ coverage: 0.2, draw: all }, { coverage: 0.32, draw: g => rimShade(g, st, 330) }, { coverage: 0.5, draw: g => rimShade(g, st, 470) }, { coverage: 0.7, draw: g => rimShade(g, st, 620) },
-    ...lamp, { lift: 0.3, draw: g => schoolPath(g, sc, -1, 2.2) }, hull(0.8), { coverage: 0, draw: knock }]);
-  fastBandPass(ctx, 'indigo', {}, [{ coverage: 0.45, draw: g => rimShade(g, st, 640) }, hull(0.9), { coverage: 0, draw: knock }]);
-  fastBandPass(ctx, 'florange', {}, [{ coverage: 0.8, draw: g => canals(g, st) }, { coverage: 0, draw: g => { knock(g); subBody(g, st); } }]);
+  fastBandPass(ctx, 'indigo', {}, [{ coverage: 0.14, draw: all }, { coverage: 0.3, draw: g => rimShade(g, st, 330) }, { coverage: 0.48, draw: g => rimShade(g, st, 470) }, { coverage: 0.68, draw: g => rimShade(g, st, 620) },
+    ...lamp, { lift: 0.3, draw: g => schoolPath(g, sc, -1, 2.2) }, hull(0.95), { coverage: 0, draw: knock }]);
+  fastBandPass(ctx, 'sunflower', {}, [{ coverage: 0.75, draw: g => canals(g, st) }, { coverage: 0, draw: g => { knock(g); subBody(g, st); } }]);
   inkPass(ctx, 'sunflower', {}, g => gonadsIn(g, st));
 }
 
@@ -1867,26 +1868,25 @@ function drawArt(t) {
   // The school: fluo dots on their paper, each ink inside a faint halo of itself.
   if (st.school) SCH_INKS.forEach((ink, k) => {
     const sc = st.school;
-    fastBandPass(ctx, ink, {}, [{ coverage: 0.2 * sc.glow, draw: g => schoolPath(g, sc, k, 1.8) }, { coverage: 0, draw: g => schoolPath(g, sc, -1, 1) }]);
-    inkPass(ctx, ink, {}, g => schoolPath(g, sc, k, 1));
+    fastBandPass(ctx, ink, {}, [{ coverage: 0.16 * sc.glow * SCH_COV[ink], draw: g => schoolPath(g, sc, k, 1.8) }, { coverage: 0, draw: g => schoolPath(g, sc, -1, 1) }]);
+    inkPass(ctx, ink, { coverage: SCH_COV[ink] }, g => schoolPath(g, sc, k, 1));
   });
 
   // Sub: aqua rim light and window, florange stripe, the lamp in the nose with its beam.
-  inkPass(ctx, 'aqua', {}, g => { g.strokeStyle = '#000'; subRim(g, st); subWindow(g, st); });
-  inkPass(ctx, 'florange', {}, g => subStripe(g, st));
+  inkPass(ctx, 'blue', { coverage: 0.4 }, g => subWindow(g, st));
+  inkPass(ctx, 'sunflower', {}, g => subStripe(g, st));
   if (st.lamp > 0.02) {
-    fastBandPass(ctx, 'sunflower', {}, [{ coverage: 0.55 * st.lamp, draw: g => beam(g, st, 1, 1.5, 1050) }, { over: 0.75 * st.lamp, draw: g => beam(g, st, 1, 0.7, 760) }, { coverage: 1, draw: g => subLampDot(g, st) },
+    fastBandPass(ctx, 'sunflower', {}, [{ coverage: 0.9 * st.lamp, draw: g => beam(g, st, 1, 0.55, 520) }, { coverage: 1, draw: g => subLampDot(g, st) },
       { coverage: 0, draw: g => { subBody(g, st); if (st.school) schoolPath(g, st.school, -1, 1); } }, { coverage: 1, draw: g => subLampDot(g, st) }]);
-    fastBandPass(ctx, 'florange', {}, [{ coverage: 0.7 * st.lamp, draw: g => { const [x, y] = nose(st); g.setTransform(K, 0, 0, K, 0, 0); glowFill(g, x, y, 90, 1, 0.3); g.beginPath(); g.arc(x, y, 90, 0, TAU); g.fill(); } },
+    fastBandPass(ctx, 'pink', {}, [{ coverage: 0.5 * st.lamp, draw: g => { const [x, y] = nose(st); g.setTransform(K, 0, 0, K, 0, 0); glowFill(g, x, y, 90, 1, 0.3); g.beginPath(); g.arc(x, y, 90, 0, TAU); g.fill(); } },
       { coverage: 0, draw: g => subBody(g, st) }]);
   }
 
   // Sonar, confetti and bubbles over paper.
   if (!st.inside) {
-    inkPass(ctx, 'aqua', { alpha: 0.3 }, g => { g.strokeStyle = '#000'; rings(g, st, false); });
-    for (const ink of ['aqua', 'pink', 'sunflower']) inkPass(ctx, ink, {}, g => specksPath(g, st, ink));
+    inkPass(ctx, 'blue', { alpha: 0.2 }, g => { g.strokeStyle = '#000'; rings(g, st, false); });
     if (st.drop) inkPass(ctx, 'pink', {}, g => { g.strokeStyle = '#000'; rings(g, st, true); });
-    inkPass(ctx, 'aqua', { alpha: 0.7 }, g => { g.strokeStyle = '#000'; g.lineWidth = 1.6; bubbles(g, st, true); });
+    inkPass(ctx, 'blue', { alpha: 0.5 }, g => { g.strokeStyle = '#000'; g.lineWidth = 1.6; bubbles(g, st, true); });
   }
   CAM = { z: 1, fx: 0, fy: 0, ox: 0, oy: 0 };
   // Drop flash.
@@ -1898,32 +1898,33 @@ function drawArt(t) {
   // Tears escalate in 8-bar steps: every 4th bar, then every bar, then every bar harder; the outro calms back.
   const every = k && (k.bar >= 81 && k.bar <= 96 ? 1 : 4), hard = k && k.bar >= 89 && k.bar <= 96;
   const tear = inDrop && k && k.down && k.age < 0.13 && (k.bar - 1) % every === 0 ? (k.bar % 8 === 1 ? 0.8 : hard ? 0.5 : 0.3) : 0;
+  // The print is the picture (as in roost); the tape is a light touch, and only the drop tears it.
   vhs(ctx, t, {
-    chroma: 2.6 + (inDrop ? 5 : 1.5) * st.kick + 12 * flash,
-    track: clamp((st.p.id === 'trans' ? 0.5 : 0) + st.rise * 0.9, 0, 1),
+    chroma: 0.6 + (inDrop ? 3 : 0) * st.kick + 10 * flash,
+    track: clamp((st.p.id === 'trans' ? 0.35 : 0) + st.rise * 0.6, 0, 1),
     glitch: Math.max(tear, flash),
     glitchKey: k ? k.i : 0,
-    noise: 0.055 + (st.p.id === 'breakdown' ? 0.05 : 0),
-    scan: 0.1, bleed: 0.22, sat: 1.5, contrast: 1.2, lines: Math.round(6 * YS),
+    noise: 0.02, scan: 0.03, bleed: 0.12, wobble: 0.3,
+    lines: inDrop ? Math.round(3 * YS) : 0,
   });
 }
 
 function drawSea(st) {
-  for (const name of ['aqua', 'blue', 'indigo', 'purple', 'midnight']) backgroundPlate(name, st);
+  for (const name of SEA_PLATES) backgroundPlate(name, st);
 
   // Horizon haze over the sea at sunset, sun and glints.
   if (st.surf > -30) inkPass(ctx, 'pink', { coverage: 0.4 }, g => { g.fillRect(0, st.surf - 140, W, 140); g.globalCompositeOperation = 'destination-out'; sun(g, st); });
   if (st.surf > -120) inkPass(ctx, 'sunflower', {}, g => { sun(g, st); g.globalCompositeOperation = 'destination-out'; g.fillRect(0, st.surf - 60, W, H); g.globalCompositeOperation = 'source-over'; glints(g, st); });
-  if (st.surf > -20) inkPass(ctx, 'florange', {}, g => { sun(g, st); g.globalCompositeOperation = 'destination-out'; g.fillRect(0, 0, W, st.surf - 70); });
+  if (st.surf > -20) inkPass(ctx, 'pink', { coverage: 0.7 }, g => { sun(g, st); g.globalCompositeOperation = 'destination-out'; g.fillRect(0, 0, W, st.surf - 70); });
 
   // Reef in four inks, tips glowing sunflower (cut from their coral ink first, so they stay yellow).
   if (st.S < CORAL_END + 300) {
-    for (const ink of ['pink', 'florange', 'aqua']) inkPass(ctx, ink, {}, g => { g.strokeStyle = '#000'; coralEach(st, ink, coralShape)(g); g.globalCompositeOperation = 'destination-out'; coralEach(st, ink, coralTips)(g); });
-    inkPass(ctx, 'sunflower', {}, g => { g.strokeStyle = '#000'; coralEach(st, 'sunflower', coralShape)(g); coralEach(st, null, coralTips)(g); });
+    inkPass(ctx, 'pink', {}, g => { g.strokeStyle = '#000'; coralEach(st, 'pink', coralShape)(g); coralEach(st, 'orange', coralShape)(g); g.globalCompositeOperation = 'destination-out'; coralEach(st, null, coralTips)(g); });
+    inkPass(ctx, 'sunflower', {}, g => { g.strokeStyle = '#000'; coralEach(st, 'sunflower', coralShape)(g); coralEach(st, 'orange', coralShape)(g); coralEach(st, null, coralTips)(g); });
   }
 
   // Creature lights, each ink on its paper inside a bloom of itself.
-  for (const ink of ['sunflower', 'aqua', 'pink']) if (st.lights.some(d => d.ink === ink)) {
+  for (const ink of ['sunflower', 'blue', 'pink']) if (st.lights.some(d => d.ink === ink)) {
     fastBandPass(ctx, ink, {}, [{ coverage: 1, draw: g => st.lights.filter(d => d.ink === ink).forEach(d => { glowFill(g, d.x, d.y, d.r * 4, 0.35); g.beginPath(); g.arc(d.x, d.y, d.r * 4, 0, TAU); g.fill(); }) }]);
     inkPass(ctx, ink, {}, g => dotsPath(g, st.lights, ink, 1));
   }
@@ -1936,8 +1937,8 @@ function drawSea(st) {
       { coverage: 0.72, draw: J(jellyBell) }, { over: 0.55, draw: J((g, s) => { g.beginPath(); bellPath(g, s, 1); bellPath(g, s, 0.78); g.fill('evenodd'); }) },
       { coverage: 1, draw: J((g, s) => { jellyRim(g, s); tentacles(g, s, false); oralArms(g, s); }) },
       ...(st.school ? [{ coverage: 0, draw: g => schoolPath(g, st.school, -1, 1) }] : [])]);   // fish in front of the jelly stay on paper
-    inkPass(ctx, 'florange', {}, J((g, s) => { g.strokeStyle = '#000'; jellyRibs(g, s); jellyGonads(g, s, false); tentacles(g, s, true); }));
-    inkPass(ctx, 'florange', { coverage: 0.5 }, J(oralArms));
+    inkPass(ctx, 'sunflower', {}, J((g, s) => { g.strokeStyle = '#000'; jellyRibs(g, s); jellyGonads(g, s, false); tentacles(g, s, true); }));
+    inkPass(ctx, 'sunflower', { coverage: 0.35 }, J(oralArms));
     inkPass(ctx, 'sunflower', {}, J((g, s) => { g.strokeStyle = '#000'; jellyEdge(g, s, 22); jellyGonads(g, s, true); }));
     fastBandPass(ctx, 'sunflower', {}, [{ coverage: 1, draw: J((g, s) => { glowFill(g, s.jx, s.jy - 230, 420, 0.4, 0.4); g.beginPath(); g.arc(s.jx, s.jy - 230, 420, 0, TAU); g.fill(); }) }]);
   }

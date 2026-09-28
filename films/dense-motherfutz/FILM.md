@@ -267,6 +267,32 @@ Bekannte Fehler / offen aus Runde 4:
   reine Silhouetten; das Innere am Schluss sehr grafisch.
 - Voll-Render 1080×1920 steht aus (geschätzt ~65 min mit drei Prozessen).
 
+## Runde 5 (2026-09-28): zurück zum Druck, nach reference/films/roost
+
+Nutzer: roost sieht schöner aus. Befund aus dem Quellvergleich (nicht die Auflösung): roost hat kein VHS,
+nur vier Inks mit Überdruck-Mischtönen, eine Lichtquelle mit klarer Helligkeitsordnung, organisch
+gewachsene Formen und Korn aus dem Raster statt aus Rauschen. Umgesetzt:
+- **Vier Inks:** Blau, Indigo, Pink, Sunflower. Das Meer liegt auf Blau + Indigo, Pink macht die Tiefe violett
+  und die Dämmerung lila, Orange ist Pink über Sunflower (Riff, Qualle, Kanäle im Inneren, Lampenglut).
+  Aqua, Purple, Midnight und Florange sind raus. Blaue Schwarmfische drucken als helle Tönung (0,42).
+- **VHS nur noch als Hauch:** Chroma 0,6, Rauschen 0,02, Scanlines 0,03, keine Sättigung/Kontrast-Übersteuerung.
+  Dropout-Linien und Tears nur im Drop.
+- **Kein Konfetti:** nur ~750 papierweiße Schwebeteilchen. `JIT` wieder ±8.
+- **Lampenkegel:** Gelb nur im heißen Kern; der weiche Kegel hebt nur das Wasser an (Gelb über Blau druckte grün).
+- **Formen mit Hand:** Fischsilhouetten leicht unregelmäßig geschnitten (`makeWob` pro Fisch, fest in der Zeit),
+  Manta mit konvexer Vorderkante, spitzen Flügeln und konkaver Hinterkante, Glockenrand mit ungleich tiefen Bögen.
+
+Geprüft: `verify.mjs` grün; Stills in 1080×1920 bei 3–187 s. Nicht geprüft: Bewegung, Ton.
+
+Renders Runde 5:
+- `out/dense-motherfutz-probe-15-30-1080.mp4`: 15–30 s, 1080×1920, 256 s mit drei Prozessen. Vom Nutzer
+  angesehen: „sieht schon viel besser aus“.
+- **`out/dense-motherfutz-9x16.mp4`**: ganzer Film, 1080×1920, 30 fps, 192,00 s, H.264 + AAC 48 kHz,
+  1,35 GB (56 Mbit/s, das Raster frisst Bitrate). 13 088 s Laufzeit, davon ~2,8 h Stillstand zwischen
+  Frame 601 und 901 von Job 0 (vermutlich Rechner im Ruhezustand); die Datei ist trotzdem vollständig.
+  Helligkeit jede Sekunde: gleichmäßig von 142 (Intro) über 150 (Flachwasser) auf ~75–84 (Breakdown und
+  Drop), Sprünge nur 179–182 s (Flug ins Innere der Qualle, gewollt), Inneres ~111. Keine Aussetzer.
+
 ## Voll-Render (2026-09-26, erste Fassung, 1:1; veraltet)
 
 `out/dense-motherfutz.mp4`: 192,00 s, 5760 Frames, 1080², H.264 + AAC. In sechs 32-s-Stücken
