@@ -1,0 +1,1553 @@
+<!doctype html>
+<html lang="de"><meta charset="utf-8"><title>lift-hochhaus</title>
+<style>
+html,body{margin:0;background:#1d1d29;color:#ede8df;font:14px system-ui}
+canvas{display:block;height:min(88vh,1280px);width:auto}nav{max-width:720px;padding:12px;display:flex;gap:12px;align-items:center}
+input{flex:1}button,a{color:inherit}a{display:none}button{background:#414153;border:0;padding:8px;cursor:pointer}
+</style><canvas id="c"></canvas><audio id="track" src="track.wav" preload="auto"></audio><script src="features.js"></script>
+<nav><button id="play">Play</button><button id="replay">Replay</button><input id="scrub" type="range" min="0" max="192" value="0" step="0.0333333333"><output id="time">0</output><button id="record">Record</button><a id="download">Download</a></nav>
+<script>
+'use strict';
+/* Dense Motherfutz — Strang 2: "Aufzug durchs Hochhaus". 9:16 (1080 × 1920), ?aspect=1:1 for a square cut,
+   ?res=540 draws natively at 540 px wide for probes (never a downscaled frame: the halftone would moiré).
+
+   Engine (differs from the first film): every shape is painted as an INK MIX, e.g. {indigo: .8, purple: .6}.
+   The painter keeps one coverage channel per ink, three inks per RGB canvas (8 inks, 3 canvases):
+     paint(path, mix)  the shape owns its value: every plate takes the mix, inks not named are cleared.
+                       A bright subject is therefore knocked out of every dark plate automatically.
+     add(path, mix)    overprints more ink (screen blend: 1-(1-a)(1-b)), never clears.
+     light(path, lift) takes ink away (multiply by 1-lift): a lamp, a glow, a flash.
+   Gradients (paintG/addG/lightG) carry alpha, so glows and ramps are continuous; the screen turns them
+   into dot-size ramps. One pixel loop then screens every channel against its canvas-anchored dot tile
+   (with a fixed per-pixel jitter for grain, low-frequency density noise and ink starvation baked into the
+   thresholds), offsets each plate by its registration miss and multiplies the inks onto the paper.
+   vhs() runs last on the finished print.
+
+   World: metres, x right, y up, z forward, one-point perspective (pj). Cabin, floors, shaft and roof are
+   built in the same projection, so a dolly through the doors keeps every plane consistent.        */
+const QS = new URLSearchParams(location.search);
+const RES = Math.max(180, Math.min(1080, Math.round(Number(QS.get('res')) || 1080)));
+const W = 1080, H = QS.get('aspect') === '1:1' ? 1080 : 1920, HC = H / 2;
+const OUTW = RES, OUTH = Math.round(RES * H / W), K = OUTW / W, NPX = OUTW * OUTH;
+const PITCH = Math.max(4, 4.6 * K), DUR = 192;
+const PAPER = '#F2EDE3';
+const INK = { pink: '#FF48B0', aqua: '#5EC8E5', sunflower: '#FFB511', indigo: '#2E3192', purple: '#765BA7', florange: '#FF7477', blue: '#0078BF', midnight: '#435060' };
+/* Screen angles as rational tangents (b/a): only those tile seamlessly. Blue shares aqua's angle and
+   midnight shares indigo's: on different angles those pairs beat into a diamond moiré (first film).  */
+const SCREEN = { pink: { a: 1, b: 4 }, aqua: { a: 3, b: 1 }, sunflower: { a: 1, b: 0 }, indigo: { a: 1, b: 1 }, purple: { a: 1, b: 2 }, florange: { a: 1, b: 3 }, blue: { a: 3, b: 1 }, midnight: { a: 1, b: 1 } };
+const REG = { pink: [-2.5, 2], aqua: [-1.5, 1], sunflower: [1.5, 1.5], indigo: [0, 0], purple: [-1, -2], florange: [2, -1.5], blue: [1.5, -1], midnight: [0.5, 0.5] };
+const CHN = [['pink', 'aqua', 'sunflower'], ['indigo', 'purple', 'florange'], ['blue', 'midnight', null]];
+const INKS = CHN.flat().filter(Boolean);
+
+/* ── basics ──────────────────────────────────────────────────────────────────── */
+function mulberry32(a) { return function () { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+const rngFor = key => mulberry32(hash(key));
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, u) => a + (b - a) * u;
+const TAU = Math.PI * 2;
+const phase = (t, t0, dur) => clamp((t - t0) / dur, 0, 1);
+const smooth = u => u * u * (3 - 2 * u);
+const easeOutCubic = u => 1 - (1 - u) ** 3, easeInQuad = u => u * u, easeInCubic = u => u * u * u;
+const easeInOutCubic = u => u < .5 ? 4 * u * u * u : 1 - (-2 * u + 2) ** 3 / 2;
+const easeOutQuad = u => 1 - (1 - u) * (1 - u);
+function cv(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+/** Mass arriving and ringing down: bounces half-cycles, damp stiffness; lands exactly on 1. */
+function settle(u, o) {
+  if (u <= 0) return 0; if (u >= 1) return 1; o = o || {};
+  const n = o.bounces ?? 2, k = o.damp ?? 5, f = x => 1 - Math.exp(-k * x) * Math.cos(n * Math.PI * x);
+  return f(u) + (1 - f(1)) * u;
+}
+function makeWob(rng, harmonics = 3) { const h = []; for (let i = 0; i < harmonics; i++) h.push([2 + i, rng() * 2 - 1, rng() * TAU]); return th => h.reduce((s, [k, a, p]) => s + a * Math.sin(k * th + p), 0) / harmonics; }
+/** Deterministic wander in t (a sine stack), never an rng drawn per frame. */
+const wander = (key, hz, harm) => { const w = makeWob(rngFor(key), harm || 3); return t => w(TAU * hz * t); };
+/** Smooth 1D value noise, pure in x. */
+function vnoise(key) { const r = rngFor(key), v = Float32Array.from({ length: 512 }, r); return x => { const i = Math.floor(x), u = x - i, a = v[i & 511], b = v[(i + 1) & 511]; return lerp(a, b, u * u * (3 - 2 * u)); }; }
+
+/* ── ink mixes ─────────────────────────────────────────────────────────────────
+   A mix is {ink: coverage 0..1}. No black exists: the darkest mix is an overprint of indigo, purple,
+   midnight (and blue), with paper still showing between the dots.                                  */
+function mix(a, b, u) { const o = {}; for (const k in a) o[k] = a[k] * (1 - u); for (const k in b) o[k] = (o[k] || 0) + b[k] * u; return o; }
+function scale(a, s) { const o = {}; for (const k in a) o[k] = clamp(a[k] * s, 0, 1); return o; }
+function over(a, b) { const o = { ...a }; for (const k in b) o[k] = 1 - (1 - (o[k] || 0)) * (1 - b[k]); return o; }   // overprint b on a
+const PAPERW = {};
+const C = {
+  night:  { indigo: .88, purple: .72, midnight: .34, blue: .12 },
+  deep:   { indigo: .72, purple: .62, midnight: .18 },
+  dusk:   { indigo: .5, purple: .55, pink: .1 },
+  violet: { purple: .8, indigo: .28 },
+  plum:   { purple: .7, pink: .45, indigo: .2 },
+  pink:   { pink: 1 }, rose: { pink: .55 }, magenta: { pink: 1, purple: .45 },
+  orange: { florange: 1 }, peach: { florange: .5, sunflower: .25 },
+  sun:    { sunflower: 1 }, gold: { sunflower: 1, florange: .45 }, hot: { sunflower: .9, florange: .9 },
+  red:    { pink: .9, florange: 1 },
+  aqua:   { aqua: 1 }, ice: { aqua: .4 }, teal: { aqua: .9, blue: .45 }, sea: { aqua: .85, blue: .75, indigo: .15 },
+  green:  { aqua: .85, sunflower: .8 }, leaf: { aqua: .9, sunflower: .6, blue: .3 }, jungle: { aqua: .7, sunflower: .5, blue: .55, indigo: .3 },
+};
+
+/* ── halftone screens ──────────────────────────────────────────────────────────
+   For tanθ = b/a the dot lattice tiles a square of side P√(a²+b²). A pixel takes ink when coverage
+   exceeds π·d²/P², d the distance to the nearest dot centre. Screens are anchored to the canvas, never
+   to a subject: a screen that rides along makes the texture crawl.                                 */
+function buildScreen(name) {
+  const { a, b } = SCREEN[name], n = a * a + b * b, S = Math.max(2, Math.round(PITCH * Math.sqrt(n))), P = S / Math.sqrt(n), u = P / Math.sqrt(n);
+  const v1 = [u * a, u * b], v2 = [-u * b, u * a], pts = [];
+  for (let m = -n; m <= n; m++) for (let k = -n; k <= n; k++) {
+    const x = m * v1[0] + k * v2[0], y = m * v1[1] + k * v2[1], wx = ((x % S) + S) % S, wy = ((y % S) + S) % S;
+    if (!pts.some(p => Math.abs(p[0] - wx) < 0.01 && Math.abs(p[1] - wy) < 0.01)) pts.push([wx, wy]);
+  }
+  const wr = []; for (const [x, y] of pts) for (const dx of [-S, 0, S]) for (const dy of [-S, 0, S]) wr.push([x + dx, y + dy]);
+  const th = new Uint8Array(S * S);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    let d2 = Infinity; for (const [px, py] of wr) { const dx = x + 0.5 - px, dy = y + 0.5 - py, q = dx * dx + dy * dy; if (q < d2) d2 = q; }
+    th[y * S + x] = Math.round(clamp(Math.PI * d2 / (P * P), 0, 1) * 255);
+  }
+  return { S, th };
+}
+/* Full-frame thresholds per ink, in plate coordinates: dot tile − grain jitter + density mottling, with
+   starvation flecks that never print. Built once; the per-frame loop is then a compare per pixel.    */
+const THR = {}, REGI = {};
+(() => {
+  const jr = rngFor('jitter'), JIT = new Int8Array(NPX);
+  for (let i = 0; i < NPX; i++) JIT[i] = Math.round((jr() + jr() - 1) * 30);
+  for (const ink of INKS) {
+    const { S, th } = buildScreen(ink), t = new Uint8Array(NPX), r = rngFor('mottle:' + ink);
+    const gw = 14, gh = Math.ceil(gw * H / W), grid = Float32Array.from({ length: (gw + 1) * (gh + 1) }, () => r() * 2 - 1);
+    for (let y = 0, i = 0; y < OUTH; y++) {
+      const gy = y / OUTH * gh, iy = Math.floor(gy), fy = smooth(gy - iy), row = (y % S) * S;
+      for (let x = 0; x < OUTW; x++, i++) {
+        const gx = x / OUTW * gw, ix = Math.floor(gx), fx = smooth(gx - ix);
+        const n = lerp(lerp(grid[iy * (gw + 1) + ix], grid[iy * (gw + 1) + ix + 1], fx), lerp(grid[(iy + 1) * (gw + 1) + ix], grid[(iy + 1) * (gw + 1) + ix + 1], fx), fy);
+        t[i] = clamp(th[row + (x % S)] - JIT[i] + Math.round(n * 9), 1, 254);
+      }
+    }
+    for (let f = 0, nf = Math.round(NPX / 5200); f < nf; f++) {                // starvation flecks
+      const cx = r() * OUTW, cy = r() * OUTH, rad = (0.6 + r() * 1.9) * Math.max(1, K * 1.6);
+      for (let y = Math.max(0, Math.floor(cy - rad)); y <= Math.min(OUTH - 1, cy + rad); y++)
+        for (let x = Math.max(0, Math.floor(cx - rad)); x <= Math.min(OUTW - 1, cx + rad); x++) if ((x - cx) ** 2 + (y - cy) ** 2 < rad * rad && r() < 0.8) t[y * OUTW + x] = 255;
+    }
+    THR[ink] = t; REGI[ink] = [Math.round(REG[ink][0] * K), Math.round(REG[ink][1] * K)];
+  }
+})();
+
+/* ── paper ─────────────────────────────────────────────────────────────────── */
+function bakePaper() {
+  const c = cv(OUTW, OUTH), x = c.getContext('2d'), r = rngFor('paper');
+  x.setTransform(K, 0, 0, K, 0, 0); x.fillStyle = PAPER; x.fillRect(0, 0, W, H);
+  for (const [res, maxA] of [[30, 0.10], [72, 0.075], [165, 0.05]]) {
+    const n = cv(res, Math.round(res * H / W)), nx = n.getContext('2d'), img = nx.createImageData(n.width, n.height);
+    for (let i = 0; i < n.width * n.height; i++) { img.data[i * 4] = 0xB4; img.data[i * 4 + 1] = 0xA6; img.data[i * 4 + 2] = 0x8C; img.data[i * 4 + 3] = Math.pow(r(), 1.8) * 255 * maxA; }
+    nx.putImageData(img, 0, 0); x.save(); x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high'; x.drawImage(n, 0, 0, W, H); x.restore();
+  }
+  x.save(); x.strokeStyle = '#8a7f6a';
+  for (let i = 0; i < Math.round(420 * H / W); i++) {
+    const px = r() * W, py = r() * H, len = 5 + r() * 22, ang = r() * Math.PI;
+    x.globalAlpha = 0.008 + r() * 0.016; x.lineWidth = 0.5 + r() * 0.7; x.beginPath(); x.moveTo(px, py);
+    x.quadraticCurveTo(px + Math.cos(ang) * len * 0.5 + (r() - 0.5) * 5, py + Math.sin(ang) * len * 0.5 + (r() - 0.5) * 5, px + Math.cos(ang) * len, py + Math.sin(ang) * len); x.stroke();
+  }
+  x.restore(); x.save();
+  for (let i = 0; i < Math.round(2200 * H / W); i++) { x.globalAlpha = 0.012 + r() * 0.03; x.fillStyle = r() < 0.55 ? '#7d7362' : '#ffffff'; x.beginPath(); x.arc(r() * W, r() * H, 0.4 + r() * 1.0, 0, TAU); x.fill(); }
+  x.restore();
+  return x.getImageData(0, 0, OUTW, OUTH).data;
+}
+
+/* ── painter ───────────────────────────────────────────────────────────────── */
+const COV = [0, 1, 2].map(() => { const c = cv(OUTW, OUTH); return c.getContext('2d', { willReadFrequently: true }); });
+const MODE = ['source-over', 'screen', 'multiply'];
+const liftMap = l => typeof l === 'number' ? Object.fromEntries(INKS.map(k => [k, l])) : l;
+const P = {
+  ops: [],
+  reset() { this.ops.length = 0; },
+  paint(path, col, a = 1, rule) { if (path && a > 0.002) this.ops.push({ m: 0, path, col, a, rule }); },
+  add(path, col, a = 1, rule) { if (path && a > 0.002) this.ops.push({ m: 1, path, col, a, rule }); },
+  light(path, lift, a = 1, rule) { if (path && a > 0.002) this.ops.push({ m: 2, path, col: liftMap(lift), a, rule }); },
+  /** grad: {x0,y0,x1,y1} linear or {x,y,r0?,r} radial; stops [[u, alpha]] with the op's mix, or [[u, mix, alpha]]. */
+  paintG(path, grad, col) { if (path) this.ops.push({ m: 0, path, grad, col, a: 1 }); },
+  addG(path, grad, col) { if (path) this.ops.push({ m: 1, path, grad, col, a: 1 }); },
+  lightG(path, grad, lift) { if (path) this.ops.push({ m: 2, path, grad, col: liftMap(lift ?? 1), a: 1 }); },
+  line(path, col, lw, a = 1, m = 0) { if (path && a > 0.002 && lw > 0) this.ops.push({ m, path, col: m === 2 ? liftMap(col) : col, a, lw }); },
+  lineG(path, grad, col, lw, m = 0) { if (path && lw > 0) this.ops.push({ m, path, grad, col: m === 2 ? liftMap(col) : col, a: 1, lw }); },
+  save() { this.ops.push({ k: 1 }); }, restore() { this.ops.push({ k: 2 }); },
+  clip(path, rule) { this.ops.push({ k: 3, path, rule }); },
+  /** set the transform (logical px) for following ops; tf() resets to identity. */
+  tf(m) { this.ops.push({ k: 4, m: m || [1, 0, 0, 1, 0, 0] }); },
+};
+function chan(col, inks, m) {
+  const o = [0, 0, 0];
+  if (typeof col === 'number') col = liftMap(col);
+  for (let c = 0; c < 3; c++) { const v = inks[c] ? (col && col[inks[c]]) || 0 : 0; o[c] = Math.round(255 * clamp(m === 2 ? 1 - v : v, 0, 1)); }
+  return o;
+}
+function styleOf(g, op, inks) {
+  if (op.grad) {
+    const G = op.grad, stops = G.stops.map(s => s.length === 2 ? [s[0], chan(op.col, inks, op.m), s[1]] : [s[0], chan(op.m === 2 ? liftMap(s[1]) : s[1], inks, op.m), s[2]]);
+    if (op.m === 1 && stops.every(s => s[1][0] + s[1][1] + s[1][2] === 0)) return null;
+    if (op.m === 2 && stops.every(s => s[1][0] + s[1][1] + s[1][2] === 765)) return null;
+    const gr = G.r !== undefined ? g.createRadialGradient(G.x, G.y, G.r0 || 0, G.x, G.y, Math.max(0.01, G.r)) : g.createLinearGradient(G.x0, G.y0, G.x1, G.y1);
+    for (const [u, v, a] of stops) gr.addColorStop(clamp(u, 0, 1), `rgba(${v[0]},${v[1]},${v[2]},${clamp(a, 0, 1).toFixed(4)})`);
+    return gr;
+  }
+  const v = chan(op.col, inks, op.m);
+  if (op.m === 1 && v[0] + v[1] + v[2] === 0) return null;
+  if (op.m === 2 && v[0] + v[1] + v[2] === 765) return null;
+  return `rgb(${v[0]},${v[1]},${v[2]})`;
+}
+function renderCoverage() {
+  for (let j = 0; j < 3; j++) {
+    const g = COV[j], inks = CHN[j];
+    g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1; g.fillStyle = '#000'; g.fillRect(0, 0, OUTW, OUTH);
+    g.setTransform(K, 0, 0, K, 0, 0); g.lineCap = 'round'; g.lineJoin = 'round';
+    for (const op of P.ops) {
+      if (op.k === 1) { g.save(); continue; }
+      if (op.k === 2) { g.restore(); continue; }
+      if (op.k === 3) { g.clip(op.path, op.rule || 'nonzero'); continue; }
+      if (op.k === 4) { const m = op.m; g.setTransform(K * m[0], K * m[1], K * m[2], K * m[3], K * m[4], K * m[5]); continue; }
+      const s = styleOf(g, op, inks); if (s === null) continue;
+      g.globalCompositeOperation = MODE[op.m]; g.globalAlpha = op.a;
+      if (op.lw) { g.strokeStyle = s; g.lineWidth = op.lw; g.stroke(op.path); } else { g.fillStyle = s; g.fill(op.path, op.rule || 'nonzero'); }
+    }
+    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+  }
+}
+let paperData = null;
+const frameImg = new ImageData(OUTW, OUTH);
+const INKMUL = Object.fromEntries(INKS.map(k => [k, [1, 3, 5].map(i => Math.round(parseInt(INK[k].slice(i, i + 2), 16) / 255 * 256))]));
+/** Screen every channel into dots, offset each plate, multiply the inks onto the paper. */
+function composite() {
+  const o8 = frameImg.data; o8.set(paperData);
+  for (let j = 0; j < 3; j++) {
+    const d = COV[j].getImageData(0, 0, OUTW, OUTH).data;
+    for (let c = 0; c < 3; c++) {
+      const ink = CHN[j][c]; if (!ink) continue;
+      const th = THR[ink], [ox, oy] = REGI[ink], [mr, mg, mb] = INKMUL[ink];
+      for (let y = 0; y < OUTH; y++) {
+        const py = y - oy; if (py < 0 || py >= OUTH) continue;
+        const prow = py * OUTW;
+        for (let x = 0; x < OUTW; x++) {
+          const px = x - ox; if (px < 0 || px >= OUTW) continue;
+          const p = prow + px, v = d[p * 4 + c];
+          if (v !== 0 && v > th[p]) { const q = (y * OUTW + x) * 4; o8[q] = (o8[q] * mr) >> 8; o8[q + 1] = (o8[q + 1] * mg) >> 8; o8[q + 2] = (o8[q + 2] * mb) >> 8; }
+        }
+      }
+    }
+  }
+}
+
+/* ── VHS / glitch pass, in place on the finished print ─────────────────────────
+   Row displacement (tracking band, glitch slices, dropout lines), chroma split, horizontal bleed,
+   scanlines, luma noise, an over-driven dub (sat, contrast). Noise is seeded per frame index; glitch
+   slices per caller key (a hit index), so a tear holds its shape for the life of one hit.            */
+const VSRC = new Uint8ClampedArray(NPX * 4);
+function vhs(t, o = {}) {
+  const d = frameImg.data, s = VSRC; s.set(d);
+  const chroma = (o.chroma ?? 2) * K, scan = o.scan ?? 0.1, noise = o.noise ?? 0.05, track = o.track ?? 0, glitch = o.glitch ?? 0;
+  const wobble = o.wobble ?? 0.6, bleed = o.bleed ?? 0.25, sat = o.sat ?? 1, con = o.contrast ?? 1;
+  const f = Math.round(t * 30), rng = rngFor('vhs:' + f);
+  const off = new Float32Array(OUTH), boost = new Float32Array(OUTH), cro = new Float32Array(OUTH);
+  const wob = (rng() - 0.5) * 2 * wobble * K; off.fill(wob);
+  if (o.lines) {
+    const L = rngFor('vhs:lines:' + Math.floor(t / 1.7));
+    for (let j = 0; j < o.lines; j++) {
+      const y = Math.floor((L() + t * 0.013 * (L() - 0.5)) % 1 * OUTH), h = Math.max(1, Math.round((1 + L() * 2.5) * K)), dx = (L() - 0.5) * 30 * K, b = 25 + 70 * L();
+      if (L() < 0.25 && rng() < 0.5) continue;
+      for (let r = Math.max(0, y); r < Math.min(OUTH, y + h); r++) { off[r] += dx; boost[r] = b; cro[r] = 5 * K; }
+    }
+  }
+  if (track > 0.001) {
+    const y0 = (1.1 - ((t * 0.09 + rngFor('vhs:track')()) % 1.3)) * OUTH, h = (30 + 110 * track) * K * H / 1080;
+    for (let y = Math.max(0, Math.floor(y0)); y < Math.min(OUTH, y0 + h); y++) { const u = (y - y0) / h; off[y] += Math.sin(u * Math.PI) * track * (18 + 26 * rng()) * K; boost[y] += 30 * track * Math.sin(u * Math.PI); }
+  }
+  if (glitch > 0.001) {
+    const g = rngFor('glitch:' + (o.glitchKey ?? f)), k = 1 + Math.floor(g() * 7 * glitch);
+    for (let j = 0; j < k; j++) {
+      const y = Math.floor(g() * OUTH), h = Math.round((3 + Math.floor(g() * 110 * glitch)) * K), dx = (g() - 0.5) * 240 * glitch * K;
+      for (let r = y; r < Math.min(OUTH, y + h); r++) { off[r] += dx; cro[r] = 8 * K * glitch; }
+    }
+  }
+  for (let y = 0; y < OUTH; y++) {
+    const row = y * OUTW, dy = off[y], dark = (y & 1) ? 1 - scan : 1, cy = chroma + cro[y], bo = boost[y];
+    let pr = 0, pg = 0, pb = 0;
+    for (let x = 0; x < OUTW; x++) {
+      const xr = clamp(Math.round(x - dy - cy), 0, OUTW - 1), xg = clamp(Math.round(x - dy), 0, OUTW - 1), xb = clamp(Math.round(x - dy + cy), 0, OUTW - 1);
+      const r = s[(row + xr) * 4], g = s[(row + xg) * 4 + 1], b = s[(row + xb) * 4 + 2];
+      pr = x ? pr + (r - pr) * (1 - bleed) : r; pg = x ? pg + (g - pg) * (1 - bleed * 0.3) : g; pb = x ? pb + (b - pb) * (1 - bleed) : b;
+      const nz = (rng() - 0.5) * noise * 255 + bo, i = (row + x) * 4, lum = 0.3 * pr + 0.59 * pg + 0.11 * pb;
+      d[i] = ((lum + (pr - lum) * sat - 128) * con + 128 + nz) * dark; d[i + 1] = ((lum + (pg - lum) * sat - 128) * con + 128 + nz) * dark; d[i + 2] = ((lum + (pb - lum) * sat - 128) * con + 128 + nz) * dark;
+    }
+  }
+}
+
+/* ── music ───────────────────────────────────────────────────────────────────
+   M.* reads window.FEATURES (tools/analyze.mjs, offline): pure in t. The measured grid (first film's
+   FILM.md): 130.00 BPM, bar 1 at 0.054 s, 104 bars. The kick is taken from the grid (the detector hears
+   bass notes as kicks here): four on the floor in bars 1–60 and 73–104, none in the breakdown, the
+   bar-72 fill from the detected onsets. Hats are the detected high onsets; the clap is the backbeat
+   (beats 2 and 4) where the detector confirms it.                                                    */
+const FEAT = window.FEATURES;
+const M = (() => {
+  const fps = FEAT.fps, n = FEAT.frames;
+  function val(name, t) { const a = FEAT.env[name], x = clamp(t * fps, 0, n - 1), i = Math.floor(x), u = x - i; return a[i] * (1 - u) + a[Math.min(n - 1, i + 1)] * u; }
+  return { val };
+})();
+const BEAT = 60 / 130, BAR = 4 * BEAT, D0 = 0.054;
+const T = n => D0 + (n - 1) * BAR;                     // start of bar n (1-based)
+const TB = (n, beat) => T(n) + beat * BEAT;
+const barOf = t => Math.floor((t - D0) / BAR) + 1;
+const LEAD = 0.5 / 30;                                  // react on the frame nearest the onset
+function lastOf(list, t) { let lo = 0, hi = list.length - 1, r = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (list[m].t <= t + 1e-6) { r = m; lo = m + 1; } else hi = m - 1; } return r; }
+const KICKS = (() => {
+  const k = [];
+  for (let b = 1; b <= 104; b++) {
+    if (b >= 61 && b <= 72) continue;
+    const s = b <= 8 ? 0.35 + 0.35 * (b - 1) / 7 : b <= 16 ? 0.6 : b <= 60 ? 0.9 : 1;
+    for (let q = 0; q < 4; q++) k.push({ t: TB(b, q), s, down: q === 0, bar: b, beat: q, fill: false });
+  }
+  for (const [t] of FEAT.hits.kick) if (t > TB(72, 2) - 0.06 && t < T(73) - 0.05) k.push({ t, s: 0.9, down: false, bar: 72, beat: (t - T(72)) / BEAT, fill: true });
+  return k.sort((a, b) => a.t - b.t).map((x, i) => ({ ...x, i }));
+})();
+const HATS = FEAT.hits.hat.filter(h => h[1] >= 0.3).map(([t, s], i) => ({ t, s, i }));
+const CLAPS = (() => {
+  const out = [], near = (list, t) => list.some(h => Math.abs(h[0] - t) < 0.045 && h[1] >= 0.45);
+  for (let b = 17; b <= 104; b++) { if (b >= 61 && b <= 72) continue; for (const q of [1, 3]) { const t = TB(b, q); if (near(FEAT.hits.hat, t) || near(FEAT.hits.snare, t)) out.push({ t, bar: b, beat: q }); } }
+  return out.map((x, i) => ({ ...x, i }));
+})();
+function evAt(list, t) { const r = lastOf(list, t); return r < 0 ? null : { ...list[r], age: t - list[r].t }; }
+const env = (list, t, decay, gain = 1) => { const e = evAt(list, t + LEAD); return e && e.age < decay * 3 ? (e.s ?? 1) * gain * Math.exp(-3 * e.age / decay) : 0; };
+const kickEnv = (t, d = 0.3) => env(KICKS, t, d);
+const hatEnv = (t, d = 0.16) => env(HATS, t, d);
+const clapEnv = (t, d = 0.25) => env(CLAPS, t, d);
+
+/* Kick-pulsed progress: time that runs faster on every kick, tabulated at 120 Hz (pure in t). */
+const STEP = 1 / 120;
+const PULSE = (() => { const n = Math.ceil(DUR / STEP) + 2, p = new Float32Array(n); for (let i = 1; i < n; i++) p[i] = p[i - 1] + (0.3 + kickEnv(i * STEP, 0.32)) * STEP; return p; })();
+const pulseAt = t => { const x = clamp(t / STEP, 0, PULSE.length - 1), i = Math.floor(x), u = x - i; return PULSE[i] * (1 - u) + PULSE[Math.min(PULSE.length - 1, i + 1)] * u; };
+const pulseProg = (t0, t1, t) => clamp((pulseAt(t) - pulseAt(t0)) / (pulseAt(t1) - pulseAt(t0)), 0, 1);
+
+// ART BEGIN
+/* ── timeline ──────────────────────────────────────────────────────────────────
+   Shots cut on downbeats. Travel legs (closed doors, one floor per kick) alternate with stops (doors
+   open on a floor scene). Floors by bar: lobby → 32 office (9) → 48 club (21) → 64 aquarium (33) →
+   80 jungle (45) → 96 empty floor (57); power cut at 61, the shaft rush on the riser (69), the fill in
+   the cabin (72.3), doors to the roof on the drop (73.0), back into the cabin and shut on the last frame. */
+const SHOT_DEF = [
+  ['cabinIntro', 1, 0, 9, 0], ['office', 9, 0, 17, 0], ['counter', 17, 0, 21, 0], ['club', 21, 0, 29, 0],
+  ['shaft', 29, 0, 33, 0], ['aquarium', 33, 0, 41, 0], ['crack', 41, 0, 45, 0], ['jungle', 45, 0, 53, 0],
+  ['cabinRush', 53, 0, 57, 0], ['empty', 57, 0, 61, 0], ['outage', 61, 0, 69, 0], ['shaftBuild', 69, 0, 72, 2],
+  ['fill', 72, 2, 73, 0], ['roofReveal', 73, 0, 81, 0], ['roof', 81, 0, 97, 0], ['outro', 97, 0, 105, 0],
+];
+const SHOTLIST = SHOT_DEF.map(([id, a, ab, b, bb], i) => ({ id, a, b, t0: i ? TB(a, ab) : 0, t1: Math.min(DUR, TB(b, bb)) }));
+function shotAt(t) { const s = SHOTLIST.find(s => t < s.t1) || SHOTLIST[SHOTLIST.length - 1]; return { ...s, u: phase(t, s.t0, s.t1 - s.t0), age: t - s.t0 }; }
+const TRAVEL = new Set(['cabinIntro', 'counter', 'shaft', 'crack', 'cabinRush']);
+const STOP = { office: 'office', club: 'club', aquarium: 'aquarium', jungle: 'jungle', empty: 'empty' };
+const FLOOR_EV = (() => { const ev = []; let f = 0; for (const k of KICKS) if (TRAVEL.has(shotAt(k.t + 1e-4).id)) ev.push({ t: k.t, floor: ++f, s: k.s }); return ev; })();
+// The rush: floors per second ramps from a crawl at bar 69 to a blur at the drop (tabulated, pure in t).
+const BUILD = (() => { const n = Math.ceil(DUR / STEP) + 2, f = new Float32Array(n); for (let i = 1; i < n; i++) { const t = i * STEP, u = phase(t, T(69) + 0.3, T(73) - T(69) - 0.3); f[i] = f[i - 1] + (t > T(69) + 0.3 && t < T(73) ? 0.6 + 42 * u ** 2.3 : 0) * STEP; } return f; })();
+const buildAt = t => { const x = clamp(t / STEP, 0, BUILD.length - 1), i = Math.floor(x), u = x - i; return BUILD[i] * (1 - u) + BUILD[Math.min(BUILD.length - 1, i + 1)] * u; };
+const buildSpeed = t => (buildAt(t + 0.02) - buildAt(t - 0.02)) / 0.04;
+function floorState(t) {
+  if (t >= T(69) && t < T(73)) { const f = buildAt(t); return { floor: 96 + Math.floor(f), fpos: 96 + f, speed: buildSpeed(t), ev: null }; }
+  const r = lastOf(FLOOR_EV, t + LEAD);
+  if (r < 0) return { floor: 0, fpos: 0, speed: 0, ev: null };
+  const e = FLOOR_EV[r], age = t + LEAD - e.t, u = clamp(age / 0.36, 0, 1);
+  return { floor: e.floor, fpos: e.floor - 1 + easeOutCubic(u), speed: u < 1 ? 3 * (1 - u) ** 2 / 0.36 : 0, ev: { ...e, age } };
+}
+const FLOOR_COLS = [{ sunflower: 1 }, { aqua: 1 }, { pink: 1 }, { sunflower: .6, florange: .7 }, { aqua: .5 }];
+
+/* ── camera & projection (one-point; metres) ─────────────────────────────── */
+const CW = 0.85, CHT = 2.45, CD = 1.9, DW = 0.5, DH = 2.1, REV = 0.14, LZ = CD + 0.05, EYE = 1.55, NEAR = 0.04;
+const CAM = {};
+function setCam(o) { Object.assign(CAM, { x: 0, y: EYE, z: 0, F: 693, cx: 540, cy: HC, roll: 0, ox: 0, oy: 0 }, o); CAM.cr = Math.cos(CAM.roll); CAM.sr = Math.sin(CAM.roll); }
+setCam({});
+function pj(x, y, z) {
+  const d = z - CAM.z; if (d < NEAR * 0.999) return null;
+  const s = CAM.F / d, X = (x - CAM.x) * s, Y = -(y - CAM.y) * s;
+  return [CAM.cx + CAM.ox + X * CAM.cr - Y * CAM.sr, CAM.cy + CAM.oy + X * CAM.sr + Y * CAM.cr];
+}
+const scz = z => CAM.F / Math.max(NEAR, z - CAM.z);
+function clipNear(pts) {
+  const zn = CAM.z + NEAR, out = [];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length], ain = a[2] >= zn, bin = b[2] >= zn;
+    if (ain) out.push(a);
+    if (ain !== bin) { const u = (zn - a[2]) / (b[2] - a[2]); out.push([a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, zn]); }
+  }
+  return out;
+}
+/** World polygon → path (near-clipped). Appends to p when given, so one path can batch many shapes. */
+function poly(pts, p) { p = p || new Path2D(); const q = clipNear(pts); if (q.length < 3) return p; q.forEach((v, i) => { const s = pj(v[0], v[1], v[2]); i ? p.lineTo(s[0], s[1]) : p.moveTo(s[0], s[1]); }); p.closePath(); return p; }
+const rectZ = (x0, y0, x1, y1, z, p) => poly([[x0, y0, z], [x1, y0, z], [x1, y1, z], [x0, y1, z]], p);
+const rectY = (x0, z0, x1, z1, y, p) => poly([[x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1]], p);
+const rectX = (z0, y0, z1, y1, x, p) => poly([[x, y0, z0], [x, y0, z1], [x, y1, z1], [x, y1, z0]], p);
+/** Matrix that maps world x/y in the plane z (y up) to the screen: shapes authored in metres. */
+function planeM(z) {
+  const s = scz(z), cr = CAM.cr, sr = CAM.sr, Cx = CAM.cx + CAM.ox, Cy = CAM.cy + CAM.oy;
+  return new DOMMatrix([s * cr, s * sr, s * sr, -s * cr, Cx - s * cr * CAM.x - s * sr * CAM.y, Cy - s * sr * CAM.x + s * cr * CAM.y]);
+}
+function inPlane(z, local, p) { p = p || new Path2D(); if (z - CAM.z > NEAR) p.addPath(local, planeM(z)); return p; }
+const FULL = (() => { const p = new Path2D(); p.rect(-80, -80, W + 160, H + 160); return p; })();
+function circ(x, y, r, p) { p = p || new Path2D(); p.moveTo(x + r, y); p.arc(x, y, r, 0, TAU); return p; }
+function pline(pts, p) { p = p || new Path2D(); pts.forEach((q, i) => i ? p.lineTo(q[0], q[1]) : p.moveTo(q[0], q[1])); return p; }
+const rgrad = (x, y, r, stops) => ({ x, y, r, stops });
+const lgrad = (x0, y0, x1, y1, stops) => ({ x0, y0, x1, y1, stops });
+/** Elliptical radial glow in screen px (rx, ry, rotation). mode: 'light' lifts ink, 'add' overprints, 'paint' blends. */
+function glowE(x, y, rx, ry, col, a, mode = 'light', rot = 0, mid = 0.35) {
+  if (a <= 0.003 || rx < 0.3 || ry < 0.3) return;
+  const c = Math.cos(rot), s = Math.sin(rot), q = ry / rx;
+  P.tf([c, s, -s * q, c * q, x, y]);
+  const g = rgrad(0, 0, rx, [[0, a], [mid, a * 0.42], [1, 0]]), path = circ(0, 0, rx);
+  if (mode === 'light') P.lightG(path, g, col); else if (mode === 'add') P.addG(path, g, col); else P.paintG(path, g, col);
+  P.tf();
+}
+
+/* ── seven-segment glyphs (the floor counter) ─────────────────────────────── */
+const SEG = (() => {
+  const t = 0.17, g = 0.03, h = 2, hx = (x0, x1, y) => [[x0, y], [x0 + t / 2, y - t / 2], [x1 - t / 2, y - t / 2], [x1, y], [x1 - t / 2, y + t / 2], [x0 + t / 2, y + t / 2]];
+  const vx = (x, y0, y1) => [[x, y0], [x + t / 2, y0 + t / 2], [x + t / 2, y1 - t / 2], [x, y1], [x - t / 2, y1 - t / 2], [x - t / 2, y0 + t / 2]];
+  return { a: hx(g, 1 - g, 0), b: vx(1, g, h / 2 - g), c: vx(1, h / 2 + g, h - g), d: hx(g, 1 - g, h), e: vx(0, h / 2 + g, h - g), f: vx(0, g, h / 2 - g), g: hx(g, 1 - g, h / 2) };
+})();
+const GLYPH = { '0': 'abcdef', '1': 'bc', '2': 'abdeg', '3': 'abcdg', '4': 'bcfg', '5': 'acdfg', '6': 'acdefg', '7': 'abc', '8': 'abcdefg', '9': 'abcdfg', '-': 'g', 'P': 'abefg', 'H': 'bcefg', ' ': '' };
+/** Segments of a string as a local path in metres (y up): x0 left, yTop top edge, gh glyph height. */
+function segPath(str, x0, yTop, gh, lit, p) {
+  p = p || new Path2D(); const k = gh / 2;
+  [...str].forEach((ch, n) => {
+    const on = GLYPH[ch] ?? '';
+    for (const s of 'abcdefg') {
+      if ((on.includes(s)) !== lit) continue;
+      SEG[s].forEach(([u, v], i) => { const x = x0 + (n * 1.5 + u + (2 - v) * 0.13) * k, y = yTop - v * k; i ? p.lineTo(x, y) : p.moveTo(x, y); });
+      p.closePath();
+    }
+  });
+  return p;
+}
+const counterText = st => st.roofMode ? ' PH' : st.dead ? ' --' : String(st.floor).padStart(3, ' ');
+
+/* ── frame state ─────────────────────────────────────────────────────────── */
+function stateAt(t) {
+  const shot = shotAt(t), id = shot.id, fl = floorState(t);
+  const st = { t, shot, id, ...fl, kick: kickEnv(t, 0.28), kickL: kickEnv(t, 0.6), hat: hatEnv(t), clap: clapEnv(t),
+    bass: M.val('bass', t), sub: M.val('sub', t), energy: M.val('energy', t), high: M.val('high', t), build: M.val('build', t),
+    k: evAt(KICKS, t + LEAD), travel: TRAVEL.has(id), scene: STOP[id] || null, door: 0, lamp: 1, emerg: 0, dead: false, roofMode: false, arrive: 0 };
+  // doors: open on the stop's downbeat with a small overshoot, close over its last two beats
+  if (st.scene) {
+    const o = settle(phase(t, shot.t0 + 0.01, 0.62 * BEAT), { bounces: 1, damp: 6 }), c = easeInOutCubic(phase(t, shot.t1 - 1.9 * BEAT, 1.8 * BEAT));
+    st.door = clamp(o * (1 - c), 0, 1.04); st.arrive = 1 - phase(t, shot.t0, BEAT);
+  }
+  if (id === 'roofReveal' || id === 'roof' || id === 'outro') {
+    st.roofMode = true; st.scene = 'roof';
+    const o = settle(phase(t, T(73) - 0.01, 0.42 * BEAT), { bounces: 2, damp: 5 }), c = easeInOutCubic(phase(t, T(101), TB(104, 3) - T(101)));
+    st.door = clamp(o * (1 - c), 0, 1.06); st.arrive = 1 - phase(t, T(73), BEAT);
+  }
+  // cabin lamp: stutters on with the first kicks, dies at the power cut, strobes through the fill
+  if (id === 'cabinIntro') {
+    const on = smooth(phase(t, T(2.6), 1.4 * BAR)), fl2 = rngFor('stutter' + Math.floor(t * 14))() < 0.25 + 0.6 * on ? 1 : 0;
+    st.lamp = Math.max(on, 0.9 * kickEnv(t, 0.22) * (t < T(4) ? 1 : 0), fl2 * 0.8 * phase(t, T(1.5), 1.5 * BAR));
+  }
+  if (id === 'outage') {
+    const die = t < TB(61, 0.5) ? (rngFor('die' + Math.floor(t * 30))() < 0.5 ? 0.8 : 0) : 0;
+    st.lamp = die; st.dead = true;
+    st.emerg = smooth(phase(t, TB(61, 1), BAR)) * (0.78 + 0.22 * Math.sin(TAU * (t - T(61)) / (2 * BAR) - Math.PI / 2)) * (t < TB(61, 2) && rngFor('em' + Math.floor(t * 20))() < 0.4 ? 0.3 : 1) * (t > T(65) && t < TB(65, 1.5) && rngFor('em65' + Math.floor(t * 16))() < 0.55 ? 0.15 : 1);   // it stutters where the sub drops out (bar 65)
+  }
+  if (id === 'crack') st.lamp = 0.45;
+  // the end: the doors meet on the last kick and the power cuts with the track
+  if (id === 'outro' && t >= TB(104, 3) - LEAD) { st.lamp = t < TB(104, 3) + 0.1 && Math.floor(t * 40) % 2 ? 0.6 : 0; st.dead = false; }
+  if (id === 'fill') st.lamp = 0.35 + 0.65 * kickEnv(t, 0.12);
+  // camera per shot
+  const sway = wander('sway', 0.11), sway2 = wander('sway2', 0.07);
+  let cam = { z: 0.1 };
+  const jolt = st.travel ? 5 * st.kick : 0, rumble = st.travel ? 1.6 * Math.sin(t * 61) * st.bass : 0;
+  switch (id) {
+    case 'cabinIntro': cam = { z: lerp(-0.3, 0.12, easeInOutCubic(shot.u)), oy: jolt + rumble }; break;
+    case 'counter': cam = { x: 0.012 * sway(t), y: 2.26, z: CD - 0.57, F: 1080 * (1 + 0.035 * st.kick), oy: jolt * 1.4 + rumble, roll: 0.012 * sway2(t) }; break;
+    case 'crack': cam = { x: 0.006 * sway(t), y: lerp(1.45, 1.15, shot.u), z: CD - 0.52, F: 980 * (1 + 0.02 * st.kick), oy: jolt + rumble }; break;
+    case 'cabinRush': cam = { x: 0.08 * sway(t), z: lerp(0.0, 0.35, shot.u), roll: 0.035 * sway2(t) + 0.01 * st.kick, oy: jolt * 1.6 + rumble * 1.5 }; break;
+    case 'outage': cam = { x: 0.05 * sway(t), y: lerp(EYE, 1.86, easeInOutCubic(shot.u)), z: lerp(0.05, 1.0, easeInOutCubic(shot.u)), roll: 0.02 * sway2(t) + (t < TB(61, 1) ? 0.03 * Math.exp(-(t - T(61)) * 6) : 0), oy: t < TB(61, 1) ? 26 * Math.exp(-(t - T(61)) * 7) * Math.cos((t - T(61)) * 40) : 0 }; break;
+    case 'fill': cam = { z: 0.62, oy: 9 * st.kick * Math.sin(t * 90), ox: 5 * st.kick * Math.sin(t * 71), roll: 0.02 * st.kick * Math.sin(t * 37) }; break;
+    case 'roofReveal': { const out = easeInOutCubic(pulseProg(T(77), T(81), t)); cam = { x: -3.0 * easeInQuad(out), z: lerp(lerp(0.55, 0.95, easeInOutCubic(phase(t, T(73), 4 * BAR))), 6.2, out), cy: lerp(HC, HC + 0.06 * H, out), oy: 14 * Math.exp(-(t - T(73)) * 5) * Math.cos((t - T(73)) * 30) }; break; }
+    case 'roof': { const tk = easeInOutCubic(phase(t, T(81), 8 * BAR)), cr = easeInOutCubic(phase(t, T(89), 4 * BAR)); cam = { x: lerp(lerp(-3.0, 3.0, tk), 0.4, cr) + 0.15 * sway(t) * cr, y: lerp(EYE, 7.2, cr) + 0.12 * sway2(t) * cr, z: lerp(6.2, 7.6, cr), cy: HC + 0.06 * H, oy: 3 * st.kick }; break; }
+    case 'outro': { const back = easeInOutCubic(phase(t, T(97), 4 * BAR)), down = easeOutCubic(phase(t, T(97), 3 * BAR)); cam = { x: lerp(0.4, 0, back), y: lerp(7.2, EYE, down), z: lerp(7.6, 0.5, back), cy: lerp(HC + 0.06 * H, HC, back) }; break; }
+    default:
+      if (st.scene) { const push = easeOutQuad(pulseProg(shot.t0, shot.t1, t)); cam = { x: 0.05 * sway(t), z: lerp(0.12, 1.3, push), oy: 2.5 * st.kick * (id === 'club' ? 1 : 0.4) }; }
+  }
+  setCam(cam); st.cam = { ...CAM };
+  return st;
+}
+
+/* ── cabin ───────────────────────────────────────────────────────────────────
+   Brushed violet steel, a checker floor, a light panel in the ceiling, the counter above the doors,
+   a button column to the right. Surfaces are painted in darkness; the lamp, the emergency light, the
+   light through the door crack and the spill from an open floor then lift or tint them.            */
+// Lit colours; darkness is overprinted by the lighting pass (lamp off, far corners).
+const WALLD = { purple: .66, indigo: .4, pink: .06 };
+const DOORD = { blue: .6, indigo: .34, purple: .22 };
+const REVD = { blue: .42, purple: .34, indigo: .22 };
+const FLOORA = { indigo: .78, purple: .5, midnight: .15 }, FLOORB = { indigo: .6, purple: .6, pink: .2 };
+const CEILD = { indigo: .82, purple: .62, midnight: .2 };
+const DARKEN = { indigo: .75, purple: .45, midnight: .4, blue: .2 };
+const TUBES = [-0.36, 0.36];
+const BRUSH = (() => { const r = rngFor('brush'), out = []; for (let i = 0; i < 520; i++) out.push({ u: r(), a: r(), w: 0.4 + r() * 1.2, v0: r() * 0.3, v1: 0.7 + r() * 0.3, dark: r() < 0.45 }); return out; })();
+
+function crackBands(st) {
+  // Light through the crack. Moving up, each landing's light crosses the crack top to bottom: a kick is a
+  // landing (a broad band with a hot core), a hat is a thin streak racing past.
+  const out = [];
+  if (st.door > 0.02) return out;
+  // in the close-up the bands cross the visible stretch of the crack in about a beat
+  const cu = st.id === 'crack', y0 = cu ? Math.min(DH, CAM.y + 0.62) : DH, vK = cu ? 2.6 : 7.2, vH = cu ? 4.2 : 11;
+  if (st.travel) {
+    for (let r = lastOf(FLOOR_EV, st.t + LEAD), n = 0; r >= 0 && n < 3; r--, n++) {
+      const e = FLOOR_EV[r], age = st.t + LEAD - e.t; if (age > 0.7) break;
+      out.push({ y: y0 + 0.35 - age * vK, h: cu ? 0.3 : 0.55, core: cu ? 0.08 : 0.14, a: e.s * (1 - age / 0.75), col: FLOOR_COLS[e.floor % 5] });
+    }
+    for (let r = lastOf(HATS, st.t + LEAD), n = 0; r >= 0 && n < 4; r--, n++) {
+      const h = HATS[r], age = st.t + LEAD - h.t; if (age > 0.4) break;
+      out.push({ y: y0 + 0.2 - age * vH, h: cu ? 0.1 : 0.16, core: cu ? 0.04 : 0.07, a: 0.8 * h.s * (1 - age / 0.4), col: PAPERW });
+    }
+  }
+  if (st.id === 'fill') {
+    const v = 0.55 + 0.45 * kickEnv(st.t, 0.1);
+    for (let i = 0; i < 5; i++) out.push({ y: ((st.t * 9 + i * 0.47) % 1) * (DH + 0.6) - 0.3, h: 0.5, core: 0.3, a: v, col: FLOOR_COLS[i % 5] });
+  }
+  return out;
+}
+
+function cabin(st) {
+  const open = clamp(st.door, 0, 1.06), g = open * DW;
+  if (CAM.z > CD - 0.07) { if (st.scene) SCENES[st.scene](st); return; }   // outside: the doors are behind us
+  const ap = rectZ(-DW, 0, DW, DH, CD);
+  // beyond the door
+  if (open > 0.002) { P.save(); P.clip(ap); SCENES[st.scene](st); P.restore(); }
+  // far reveals (behind the leaves) and sill
+  P.paint(rectX(LZ, 0, CD + REV, DH, -DW), REVD); P.paint(rectX(LZ, 0, CD + REV, DH, DW), REVD); P.paint(rectY(-DW, LZ, DW, CD + REV, DH), scale(REVD, 1.1));
+  // leaves
+  const leaves = new Path2D();
+  rectZ(-DW - g, 0, -g - 0.002, DH, LZ, leaves); rectZ(g + 0.002, 0, DW + g, DH, LZ, leaves);
+  P.save(); P.clip(rectZ(-DW, 0, DW, DH, LZ)); P.paint(leaves, DOORD);
+  const brushL = new Path2D();
+  for (const b of BRUSH) { if (b.u > 0.5) continue; const x = -DW + b.u * 2 * DW; for (const side of [-1, 1]) { const xx = side < 0 ? x - g : -x + g; const p0 = pj(xx, DH * b.v0, LZ), p1 = pj(xx, DH * b.v1, LZ); if (p0 && p1) { brushL.moveTo(p0[0], p0[1]); brushL.lineTo(p1[0], p1[1]); } } }
+  P.line(brushL, 0.22, 1.1, 1, 2);
+  // a soft vertical sheen on each leaf, the ceiling panel mirrored in the steel
+  for (const side of [-1, 1]) {
+    const xa = side * (g + DW * 0.35), a = pj(xa - 0.12 * side, DH, LZ), b = pj(xa + 0.12 * side, DH, LZ);
+    if (a && b) P.lightG(rectZ(side * (g + 0.002), 0, side * (g + DW), DH, LZ), lgrad(a[0], 0, b[0], 0, [[0, 0], [0.5, 0.32 * st.lamp + 0.18 * st.emerg], [1, 0]]), 1);
+  }
+  P.restore();
+  // near reveals and sill (in front of the leaves)
+  P.paint(rectX(CD, 0, LZ, DH, -DW), scale(REVD, 0.8)); P.paint(rectX(CD, 0, LZ, DH, DW), scale(REVD, 0.8)); P.paint(rectY(-DW, CD, DW, LZ, DH), REVD);
+  const sill = rectY(-DW, CD - 0.03, DW, CD + REV, 0.004); P.paint(sill, { blue: .3, purple: .35, midnight: .15 });
+  const groove = new Path2D(); for (let i = 0; i < 6; i++) rectY(-DW + 0.02, CD + i * 0.022, DW - 0.02, CD + i * 0.022 + 0.007, 0.006, groove); P.paint(groove, { indigo: .7, purple: .6, midnight: .3 });
+  // front wall with the door hole, architrave
+  const fw = rectZ(-CW, 0, CW, CHT, CD); rectZ(-DW, 0, DW, DH, CD, fw); P.paint(fw, WALLD, 1, 'evenodd');
+  const arch = rectZ(-DW - 0.045, 0, DW + 0.045, DH + 0.045, CD - 0.003); rectZ(-DW, 0, DW, DH, CD - 0.003, arch); P.paint(arch, { blue: .45, purple: .55, indigo: .45, midnight: .2 }, 1, 'evenodd');
+  const brushF = new Path2D();
+  for (const b of BRUSH) { const x = -CW + b.u * 2 * CW; if (Math.abs(x) < DW + 0.05 && b.v1 * CHT < DH + 0.06) continue; const p0 = pj(x, CHT * b.v0, CD), p1 = pj(x, CHT * b.v1, CD); if (p0 && p1) { brushF.moveTo(p0[0], p0[1]); brushF.lineTo(p1[0], p1[1]); } }
+  P.line(brushF, 0.16, 1, 1, 2);
+  // side walls with panels
+  for (const sx of [-1, 1]) {
+    const x = sx * CW;
+    P.paint(rectX(-0.8, 0, CD, CHT, x), WALLD);
+    const seams = new Path2D(); for (const z of [0.55, 1.25]) rectX(z - 0.006, 0, z + 0.006, CHT, x * 0.999, seams); rectX(-0.8, 0.12, CD, 0.135, x * 0.999, seams);
+    P.paint(seams, { indigo: .95, purple: .85, midnight: .5 });
+    const br = new Path2D(); for (const b of BRUSH) { const z = -0.5 + b.u * (CD + 0.5), p0 = pj(x, CHT * b.v0, z), p1 = pj(x, CHT * b.v1, z); if (p0 && p1) { br.moveTo(p0[0], p0[1]); br.lineTo(p1[0], p1[1]); } }
+    P.line(br, 0.14, 1.1, 1, 2);
+    // handrail: a tube on two stand-offs
+    const hx = x - sx * 0.07, rail = new Path2D();
+    poly([[hx, 0.93, 0.15], [hx, 0.93, 1.7], [hx, 0.97, 1.7], [hx, 0.97, 0.15]], rail);
+    for (const z of [0.3, 1.55]) poly([[x, 0.94, z - 0.015], [hx, 0.94, z - 0.015], [hx, 0.94, z + 0.015], [x, 0.94, z + 0.015]], rail);
+    P.paint(rail, { blue: .35, purple: .4, indigo: .3 });
+    P.line(pline([pj(hx, 0.965, 0.15), pj(hx, 0.965, 1.7)].filter(Boolean)), { aqua: .9 }, 2.2 * scz(0.9) / 700, 0.8);
+  }
+  // floor (checker), ceiling with the light panel
+  P.paint(rectY(-CW, -0.8, CW, CD, 0), FLOORA);
+  const tiles = new Path2D(); for (let i = 0; i < 7; i++) for (let j = 0; j < 12; j++) if ((i + j) % 2) rectY(-CW + i * 0.2429, -0.8 + j * 0.225, -CW + (i + 1) * 0.2429, -0.8 + (j + 1) * 0.225, 0, tiles);
+  P.paint(tiles, FLOORB);
+  P.paint(rectY(-CW, -0.8, CW, CD, CHT), CEILD);
+  // two fluorescent tubes in shallow troughs
+  const trough = new Path2D(), tube = new Path2D();
+  for (const x of TUBES) { rectY(x - 0.07, 0.15, x + 0.07, 1.7, CHT - 0.003, trough); rectY(x - 0.022, 0.2, x + 0.022, 1.65, CHT - 0.02, tube); }
+  P.paint(trough, { indigo: .9, purple: .7, midnight: .4 });
+  P.paint(tube, mix({ indigo: .7, purple: .5, aqua: .3 }, { sunflower: .06 }, clamp(st.lamp, 0, 1)));
+  // counter and arrival lantern above the doors, buttons to the right
+  counterPanel(st);
+  buttons(st);
+  // light: everything of the cabin except the open gap between the leaves
+  const cabinOnly = new Path2D(FULL); if (open > 0.002) rectZ(-g, 0, g, DH, LZ, cabinOnly);
+  P.save(); P.clip(cabinOnly, 'evenodd');
+  const L = pj(0, CHT, 0.9) || [540, -200], Lf = pj(0, 0, 1.0) || [540, H + 200];
+  // shading: corners and the floor far from the tubes go deeper; with the lamp off everything sinks
+  P.addG(FULL, rgrad(L[0], L[1], 1.5 * H, [[0, 0], [0.45, 0.25], [1, 0.7]]), DARKEN);
+  if (st.lamp < 0.99) P.add(FULL, DARKEN, 0.82 * (1 - clamp(st.lamp, 0, 1)));
+  if (st.lamp > 0.01) {
+    for (const x of TUBES) {
+      const a = pj(x, CHT - 0.02, 0.25), b = pj(x, CHT - 0.02, 1.6);
+      if (a && b) { const m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], len = Math.hypot(b[0] - a[0], b[1] - a[1]), rot = Math.atan2(b[1] - a[1], b[0] - a[0]);
+        glowE(m[0], m[1], len * 0.75, 0.12 * H, 0.55 * st.lamp, 1, 'light', rot); glowE(m[0], m[1], len * 0.9, 0.2 * H, { pink: .25, aqua: .15 }, st.lamp, 'add', rot); }
+    }
+    P.lightG(FULL, rgrad(Lf[0], Lf[1], 0.55 * H, [[0, 0.22], [1, 0]]), st.lamp);
+    const tubeCore = new Path2D(); for (const x of TUBES) rectY(x - 0.012, 0.22, x + 0.012, 1.63, CHT - 0.021, tubeCore);
+    P.paint(tubeCore, PAPERW, clamp(st.lamp, 0, 1));
+  }
+  if (st.emerg > 0.01) {
+    const e = st.emerg, E = pj(0, CHT - 0.03, CD - 0.1) || [540, 100], Ef = pj(0, 0, CD - 0.45) || [540, H];
+    P.lightG(FULL, rgrad(E[0], E[1], 1.15 * H, [[0, 0.75], [0.12, 0.5], [0.4, 0.2], [1, 0]]), scale({ indigo: 1, purple: .65, midnight: 1, blue: 1 }, e));
+    P.addG(FULL, rgrad(E[0], E[1], 1.2 * H, [[0, 1], [0.15, 0.78], [0.45, 0.34], [1, 0.05]]), scale({ pink: 1 }, e));
+    P.addG(FULL, rgrad(Ef[0], Ef[1], 0.55 * H, [[0, 0.3], [1, 0]]), scale({ pink: .7 }, e));
+  }
+  if (open > 0.01 && st.spill) {
+    const s = st.spill, amt = s.a * clamp(open, 0, 1), c = pj(0, DH * 0.45, CD) || [540, HC], fb = pj(0, 0, CD), fn = pj(0, 0, Math.max(CAM.z + 0.3, 0.2));
+    const spillF = poly([[-DW, 0.002, CD], [DW, 0.002, CD], [DW * 1.9, 0.002, CAM.z + 0.2], [-DW * 1.9, 0.002, CAM.z + 0.2]]);
+    if (fb && fn) { P.lightG(spillF, lgrad(0, fb[1], 0, fn[1], [[0, 0.6 * amt], [1, 0.05 * amt]]), 1); P.addG(spillF, lgrad(0, fb[1], 0, fn[1], [[0, 0.7 * amt], [1, 0]]), s.col); }
+    P.lightG(FULL, rgrad(c[0], c[1], 0.9 * H, [[0, 0.3 * amt], [1, 0]]), 1);
+    P.addG(FULL, rgrad(c[0], c[1], 1.0 * H, [[0, 0.45 * amt], [1, 0]]), s.col);
+  }
+  P.restore();
+  if (st.emerg > 0.01) emergencyDetails(st);
+  // the crack
+  const bands = crackBands(st);
+  if (bands.length) {
+    const top = pj(0, DH, LZ), bot = pj(0, 0, LZ), s = scz(LZ);
+    if (top && bot) {
+      // Brushed vertically, the steel smears every light sideways: a passing landing is a coloured bar
+      // across both leaves with a hot spot in the crack; a hat is a thin white flick.
+      for (const b of bands) {
+        const yc = clamp(b.y, -0.3, DH + 0.3), p = pj(0, yc, LZ); if (!p || b.a <= 0.01) continue;
+        P.save(); P.clip(rectZ(-DW, 0, DW, DH, LZ));
+        glowE(p[0], p[1], 0.5 * s, b.h * 0.33 * s, 0.85, b.a * 0.9, 'light', 0, 0.28);
+        glowE(p[0], p[1], 0.55 * s, b.h * 0.4 * s, b.col === PAPERW ? C.ice : b.col, b.a * 0.85, 'add', 0, 0.28);
+        glowE(p[0], p[1], 0.06 * s, b.h * s, 0.9, b.a);
+        glowE(p[0], p[1], 0.1 * s, b.h * 1.2 * s, b.col, b.a * 0.8, 'add');
+        P.restore();
+        const fl = clamp(s / 1500, 0.2, 1), fc = b.col === PAPERW ? C.aqua : b.col;   // anamorphic streak through the core
+        glowE(p[0], p[1], W * 1.0 * fl, (5 + 14 * b.a) * fl, fc, 0.7 * b.a, 'add', 0, 0.12);
+        glowE(p[0], p[1], W * 0.6 * fl, (1.5 + 4 * b.a) * fl, 0.9, 0.85 * b.a, 'light', 0, 0.2);
+      }
+      const stops = [];
+      for (let i = 0; i <= 32; i++) { const y = DH * (1 - i / 32); let v = 0.12; for (const b of bands) v += b.a * Math.exp(-(((y - b.y) / (b.core + 0.04)) ** 2)); stops.push([i / 32, clamp(v, 0, 1)]); }
+      P.lineG(pline([top, bot]), lgrad(top[0], top[1], bot[0], bot[1], stops), PAPERW, Math.max(1.5, 0.006 * s));
+      // the leaf edges either side of the gap catch the light
+      for (const ex of [-0.009, 0.009]) { const a = pj(ex, DH, LZ - 0.002), c = pj(ex, 0, LZ - 0.002); if (a && c) P.lineG(pline([a, c]), lgrad(a[0], a[1], c[0], c[1], stops.map(([u, v]) => [u, v * 0.8])), { aqua: .5 }, Math.max(1, 0.004 * s), 1); }
+      // dust in front of the doors, lit where a band passes (close-up only); the whole frame takes a breath of the band's colour
+      if (st.id === 'crack') {
+        for (const b of bands) if (b.h > 0.2) P.add(FULL, b.col, 0.1 * b.a);
+        const dust = new Path2D(), dr = rngFor('cdust');
+        for (let i = 0; i < 90; i++) {
+          const x = (dr() * 2 - 1) * 0.3 + 0.02 * Math.sin(st.t * 0.4 + i), y = CAM.y + (dr() * 2 - 1) * 0.6 + 0.03 * Math.sin(st.t * 0.3 + i * 2), z = LZ - 0.03 - dr() * 0.3;
+          let v = 0; for (const b of bands) v = Math.max(v, b.a * Math.exp(-(((y - b.y) / 0.18) ** 2)) * Math.exp(-((x / 0.35) ** 2)));
+          if (v < 0.08) continue; const q = pj(x, y, z); if (q) circ(q[0], q[1], Math.max(1, 0.0022 * scz(z)) * (0.5 + v), dust);
+        }
+        P.paint(dust, PAPERW, 0.85);
+      }
+      // spill of the crack onto the floor
+      let vb = 0; for (const b of bands) vb += b.a * Math.exp(-((b.y / 0.9) ** 2));
+      if (vb > 0.01) {
+        const f0 = pj(0, 0, LZ), f1 = pj(0, 0, Math.max(CAM.z + 0.3, 0.3)), wedge = poly([[-0.01, 0.003, LZ], [0.01, 0.003, LZ], [0.34, 0.003, CAM.z + 0.3], [-0.34, 0.003, CAM.z + 0.3]]);
+        if (f0 && f1) { P.lightG(wedge, lgrad(0, f0[1], 0, f1[1], [[0, 0.5 * clamp(vb, 0, 1)], [0.4, 0.15 * clamp(vb, 0, 1)], [1, 0]]), 1); P.addG(wedge, lgrad(0, f0[1], 0, f1[1], [[0, 0.55 * clamp(vb, 0, 1)], [1, 0]]), bands[0].col); }
+      }
+    }
+  }
+}
+
+function emergencyDetails(st) {
+  const e = st.emerg, fix = rectY(-0.2, CD - 0.17, 0.2, CD - 0.05, CHT - 0.012), core = rectY(-0.16, CD - 0.14, 0.16, CD - 0.08, CHT - 0.014);
+  P.paint(fix, scale({ pink: 1, purple: .3 }, 1)); P.paint(core, mix(C.pink, PAPERW, 0.6 * e));
+  const c = pj(0, CHT - 0.015, CD - 0.11); if (c) { glowE(c[0], c[1], 160, 70, 0.8, 0.8 * e); glowE(c[0], c[1], 260, 130, C.pink, 0.9 * e, 'add'); }
+  // pink glints along the edges that face the lamp: architrave top, handrails, counter frame
+  const gl = new Path2D(), a = pj(-DW - 0.045, DH + 0.045, CD - 0.004), b = pj(DW + 0.045, DH + 0.045, CD - 0.004);
+  if (a && b) pline([a, b], gl);
+  for (const sx of [-1, 1]) { const q0 = pj(sx * (CW - 0.07), 0.972, 0.15), q1 = pj(sx * (CW - 0.07), 0.972, 1.7); if (q0 && q1) pline([q0, q1], gl); }
+  const f0 = pj(-0.315, 2.405, CD - 0.003), f1 = pj(0.315, 2.405, CD - 0.003); if (f0 && f1) pline([f0, f1], gl);
+  P.line(gl, mix(C.pink, PAPERW, 0.3), Math.max(1.4, 0.004 * scz(1.2)), 0.9 * e);
+  // dust hanging in the pink light
+  const dust = new Path2D(), dr = rngFor('edust'), t = st.t;
+  for (let i = 0; i < 120; i++) {
+    const x = (dr() * 2 - 1) * 0.8 + 0.04 * Math.sin(t * 0.3 + i), y = 0.4 + dr() * 2.0 + 0.05 * Math.sin(t * 0.21 + i * 1.7), z = 0.35 + dr() * 1.5 + 0.03 * Math.sin(t * 0.17 + i);
+    const q = pj(x, y, z); if (!q) continue; const lit = clamp(1 - Math.hypot(x, y - CHT, z - CD) / 2.4, 0, 1); if (lit < 0.1) continue;
+    circ(q[0], q[1], Math.max(0.9, 0.0035 * scz(z)) * (0.6 + lit), dust);
+  }
+  P.paint(dust, mix(C.pink, PAPERW, 0.55), 0.8 * e);
+}
+function counterPanel(st) {
+  const z = CD - 0.004, x0 = -0.3, x1 = 0.3, y0 = 2.16, y1 = 2.39;
+  P.paint(rectZ(x0 - 0.015, y0 - 0.015, x1 + 0.015, y1 + 0.015, z + 0.001), { blue: .45, purple: .5, indigo: .4 });
+  P.paint(rectZ(x0, y0, x1, y1, z), { indigo: .92, purple: .82, midnight: .6, blue: .3 });
+  const txt = counterText(st), gh = 0.15, gx = -0.07, gy = y1 - 0.04;
+  const blink = st.arrive > 0 ? (Math.floor((1 - st.arrive) * 6) % 2 ? 0.35 : 1) : 1;
+  const on = inPlane(z, segPath(txt, gx, gy, gh, true)), off = inPlane(z, segPath(txt, gx, gy, gh, false));
+  P.paint(off, { florange: .16, indigo: .75, purple: .6 });
+  const c = pj(0.03, y0 + 0.11, z), s = scz(z), lvl = (st.dead ? 0.35 : 1) * blink * (st.id === 'fill' ? 0.7 + 0.3 * st.kick : 1);
+  if (c) { glowE(c[0], c[1], 0.3 * s, 0.13 * s, 0.6, 0.55 * lvl); glowE(c[0], c[1], 0.34 * s, 0.14 * s, { florange: 1, pink: .3 }, 0.6 * lvl, 'add'); }
+  P.paint(on, st.dead ? { florange: .7, pink: .2 } : mix({ florange: 1 }, { florange: .45, sunflower: .3 }, st.kick * 0.6), lvl > 0.5 ? 1 : 0.6);
+  // arrival lantern: an up-arrow, aqua while travelling, flashing gold on arrival
+  const tri = new Path2D(); tri.moveTo(-0.2, y1 - 0.045); tri.lineTo(-0.135, y0 + 0.05); tri.lineTo(-0.265, y0 + 0.05); tri.closePath();
+  const triP = inPlane(z, tri), arr = st.arrive > 0 ? (Math.floor((1 - st.arrive) * 6) % 2 ? 0 : 1) : 0;
+  const lit = st.dead ? 0 : st.travel || st.id === 'fill' || st.id === 'shaftBuild' ? 1 : arr;
+  P.paint(triP, lit ? (arr ? C.gold : C.aqua) : { aqua: .15, indigo: .75, purple: .6 });
+  const tc = pj(-0.2, y0 + 0.1, z);
+  if (lit && tc) glowE(tc[0], tc[1], 0.09 * s, 0.09 * s, arr ? C.gold : C.aqua, 0.6, 'add');
+}
+
+function buttons(st) {
+  const z = CD - 0.004, x0 = 0.6, x1 = 0.76, y0 = 0.86, y1 = 1.56;
+  P.paint(rectZ(x0, y0, x1, y1, z), { blue: .5, purple: .6, indigo: .45, midnight: .2 });
+  const ring = new Path2D(), face = new Path2D(), lit = new Path2D();
+  const sel = st.scene ? 0 : 1 + (Math.floor((st.fpos || 0) / 16) % 10);
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 2; c++) {
+    const x = x0 + 0.045 + c * 0.07, y = y1 - 0.09 - r * 0.1, n = r * 2 + c;
+    circ(x, y, 0.024, n === sel % 12 ? lit : ring); circ(x, y, 0.017, face);
+  }
+  P.paint(inPlane(z, ring), { blue: .3, purple: .35, midnight: .1 });
+  if (!st.dead) P.paint(inPlane(z, lit), C.orange); else P.paint(inPlane(z, lit), { blue: .3, purple: .35 });
+  P.paint(inPlane(z, face), { indigo: .8, purple: .7, midnight: .4 });
+  const em = inPlane(z, circ(x0 + 0.08, y0 + 0.07, 0.03));
+  P.paint(em, st.emerg > 0.1 ? C.pink : { pink: .6, purple: .4 });
+}
+
+/* ── scene kit ─────────────────────────────────────────────────────────────── */
+const kicksSince = (t0, t) => lastOf(KICKS, t + LEAD) - lastOf(KICKS, t0 - 0.02);
+function tr(local, dx, dy, sx = 1, sy = sx, rot = 0) { const p = new Path2D(), c = Math.cos(rot), s = Math.sin(rot); p.addPath(local, new DOMMatrix([sx * c, sx * s, -sy * s, sy * c, dx, dy])); return p; }
+/** Visible faces of an axis-aligned box, painted with {front, top, side, bottom?}. */
+function box(x0, x1, y0, y1, z0, z1, c) {
+  if (CAM.x < x0) P.paint(rectX(z0, y0, z1, y1, x0), c.side); else if (CAM.x > x1) P.paint(rectX(z0, y0, z1, y1, x1), c.side);
+  if (CAM.y > y1) P.paint(rectY(x0, z0, x1, z1, y1), c.top); else if (CAM.y < y0) P.paint(rectY(x0, z0, x1, z1, y0), c.bottom || c.side);
+  if (CAM.z < z0) P.paint(rectZ(x0, y0, x1, y1, z0), c.front);
+}
+function lpoly(pts, p) { p = p || new Path2D(); pts.forEach(([x, y], i) => i ? p.lineTo(x, y) : p.moveTo(x, y)); p.closePath(); return p; }
+/** A night city on a backdrop plane: sky ramp, three rows of towers, lit windows (flicker seeded per tower). */
+const CITY = (() => { const r = rngFor('city'), rows = []; for (let k = 0; k < 3; k++) { const b = []; let x = -60; while (x < 60) { const w = 1.5 + r() * 4.5 * (1 + k * 0.4); b.push({ x, w, h: (2 + r() ** 1.5 * 16) * (1 - k * 0.25) + k * 1.5, col: ['sun', 'aqua', 'pink'][Math.floor(r() * 3)], seed: r(), spire: r() < 0.15 }); x += w + r() * 1.2; } rows.push(b); } return rows; })();
+function cityBackdrop(z, x0, x1, y0, y1, hy, t, o = {}) {
+  const top = pj(0, y1, z), bot = pj(0, hy, z);
+  if (!top || !bot) return;
+  const area = rectZ(x0, y0, x1, y1, z);
+  P.paintG(area, lgrad(0, top[1], 0, bot[1], [[0, C.night, 1], [0.55, { indigo: .65, purple: .7, pink: .15 }, 1], [0.9, { purple: .5, pink: .55, florange: .15 }, 1], [1, { pink: .6, florange: .45 }, 1]]));
+  const sc = o.scale || 0.12, cols = [{ purple: .6, pink: .35, indigo: .1 }, { purple: .72, indigo: .5, pink: .12 }, { indigo: .85, purple: .7, midnight: .25 }];
+  P.save(); P.clip(area);
+  CITY.forEach((row, k) => {
+    const body = new Path2D(), wins = { sun: new Path2D(), aqua: new Path2D(), pink: new Path2D() };
+    for (const b of row) {
+      const bx = b.x * sc + (o.dx || 0), bw = b.w * sc, bh = b.h * sc * (o.hs || 1), yb = hy - 0.02 - k * 0.04 * sc * 8;
+      if (bx + bw < x0 || bx > x1) continue;
+      rectZ(bx, y0, bx + bw, yb + bh, z, body);
+      if (b.spire) rectZ(bx + bw / 2 - 0.01, yb + bh, bx + bw / 2 + 0.01, yb + bh * 1.25, z, body);
+      if (k > 0) { const r = rngFor('win' + b.seed), nx = Math.max(1, Math.floor(bw / (0.16 * sc * 8))), ny = Math.floor(bh / (0.2 * sc * 8));
+        for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) if (r() < 0.32 + 0.1 * Math.sin(t * 0.7 + b.seed * 20 + j)) rectZ(bx + (i + 0.3) * bw / nx, yb + (j + 0.3) * bh / ny, bx + (i + 0.7) * bw / nx, yb + (j + 0.62) * bh / ny, z, wins[b.col]); }
+    }
+    P.paint(body, cols[k]);
+    P.paint(wins.sun, C.gold); P.paint(wins.aqua, C.aqua); P.paint(wins.pink, C.pink);
+  });
+  P.restore();
+}
+
+/* ── floor scenes (seen through the doors) ───────────────────────────────── */
+function room(o) {
+  const { x0, x1, y1, z0, z1, floor, wall, back, ceil } = o;
+  P.paint(rectZ(x0, 0, x1, y1, z1), back);
+  P.paint(rectY(x0, z0, x1, z1, 0), floor);
+  P.paint(rectY(x0, z0, x1, z1, y1), ceil);
+  P.paint(rectX(z0, 0, z1, y1, x0), wall); P.paint(rectX(z0, 0, z1, y1, x1), wall);
+}
+const SCENES = {
+  office: officeScene,
+  club: clubScene, aquarium: aquariumScene, jungle: jungleScene, empty: emptyScene,
+  roof(st) { roof(st); st.spill = { col: { florange: .8, pink: .6 }, a: 0.9 }; },
+};
+
+/* ── office, floor 32 (bars 9–16) ───────────────────────────────────────────────
+   Open-plan office at night, dark when the doors open. Every kick switches on the next row of ceiling
+   panels, near to far, and the desks under it power their screens; once the room is lit a kick sends a
+   pulse down the rows. Screens show a bar graph of the low mids (they come in here); hats blink the
+   cursors; the build in bar 16 makes the panels stutter as the doors close. A night city fills the
+   window wall at the back.                                                                          */
+const OFF = { z0: CD + REV, zB: 25, X0: -7, X1: 7, Y1: 2.8, rows: [3.3, 5.7, 8.1, 10.5, 12.9, 15.3, 17.7, 20.1, 22.5], desks: [3.9, 6.3, 8.7, 11.1, 13.5, 15.9, 18.3, 20.7], dx: [-4.1, -2.7, -1.35, 1.35, 2.7, 4.1] };
+const CHAIR = (() => { const p = new Path2D(); p.roundRect(-0.23, 0.56, 0.46, 0.5, 0.08); p.rect(-0.25, 0.44, 0.5, 0.07); p.rect(-0.025, 0.12, 0.05, 0.34); lpoly([[-0.3, 0.06], [0.3, 0.06], [0.26, 0.12], [-0.26, 0.12]], p); return p; })();
+const PLANT = (() => { const p = new Path2D(), r = rngFor('plant'); for (let i = 0; i < 9; i++) { const a = -Math.PI / 2 + (i - 4) * 0.28 + (r() - 0.5) * 0.2, L = 0.55 + r() * 0.45, bx = Math.cos(a) * L, by = -Math.sin(a) * L + 0.45; p.moveTo(0, 0.45); p.quadraticCurveTo(bx * 0.4 - 0.08, 0.45 + (by - 0.45) * 0.9, bx, by); p.quadraticCurveTo(bx * 0.5 + 0.1, 0.45 + (by - 0.45) * 0.5, 0.02, 0.45); } return p; })();
+function officeScene(st) {
+  const t = st.t, sh = st.shot, n = kicksSince(sh.t0, t), { z0, zB, X0, X1, Y1 } = OFF;
+  const build = phase(t, T(16), BAR), stutter = build > 0 && rngFor('ofs' + Math.floor(t * 16))() < 0.35 * build ? 0.25 : 1;
+  const rowOn = i => { if (n <= i) return 0; const k = KICKS[lastOf(KICKS, sh.t0 - 0.02) + 1 + i], age = k ? t + LEAD - k.t : 9; return (age < 0.18 ? (rngFor('fl' + i + Math.floor(t * 24))() < 0.5 ? 0.35 : 1) : 1) * stutter; };
+  const lastK = evAt(KICKS, t + LEAD), pulseZ = lastK && n > OFF.rows.length ? z0 + (t + LEAD - lastK.t) * 38 : -99;
+  // window wall with the city
+  cityBackdrop(zB, X0, X1, 0, Y1, EYE - 0.35, t, { scale: 0.16, dx: 1.5 });
+  const mull = new Path2D(); for (let x = X0; x <= X1; x += 1.4) rectZ(x - 0.04, 0, x + 0.04, Y1, zB - 0.01, mull); rectZ(X0, 0.85, X1, 0.92, zB - 0.01, mull); rectZ(X0, 2.5, X1, Y1, zB - 0.01, mull);
+  P.paint(mull, { indigo: .85, purple: .6, midnight: .4 });
+  // shell
+  P.paint(rectY(X0, z0, X1, zB, Y1), { indigo: .62, blue: .4, purple: .32 });
+  P.paint(rectX(z0, 0, zB, Y1, X0), { indigo: .6, purple: .5, blue: .3 }); P.paint(rectX(z0, 0, zB, Y1, X1), { indigo: .6, purple: .5, blue: .3 });
+  P.paint(rectY(X0, z0, X1, zB, 0), { blue: .62, indigo: .66, midnight: .25 });
+  const ct = new Path2D(); for (let z = z0; z < zB; z += 0.6) rectY(X0, z, X1, z + 0.012, 0.001, ct); for (let x = X0; x < X1; x += 0.6) rectY(x, z0, x + 0.012, zB, 0.001, ct);
+  P.paint(ct, { blue: .7, indigo: .7, midnight: .3 });
+  const cg = new Path2D(); for (let z = z0; z < zB; z += 0.6) rectY(X0, z, X1, z + 0.015, Y1 - 0.001, cg); for (let x = X0; x < X1; x += 0.6) rectY(x, z0, x + 0.015, zB, Y1 - 0.001, cg);
+  P.paint(cg, { indigo: .8, purple: .5, blue: .4 });
+  // ceiling panels (row by row on the kick)
+  const panelsOn = new Path2D(), panelsOff = new Path2D(), pools = [];
+  OFF.rows.forEach((z, i) => {
+    const on = rowOn(i), hot = Math.exp(-(((z - pulseZ) / 1.6) ** 2));
+    for (const x of [-4.8, -2.4, 0, 2.4, 4.8]) rectY(x - 0.6, z - 0.3, x + 0.6, z + 0.3, Y1 - 0.004, on > 0.5 ? panelsOn : panelsOff);
+    if (on > 0.01) pools.push({ z, a: on * (0.9 + 0.5 * hot) });
+  });
+  P.paint(panelsOff, { indigo: .55, blue: .35, aqua: .15 });
+  // pillars by the walls
+  for (const z of [9.6, 17.6]) for (const x of [-6.1, 6.1]) box(x - 0.3, x + 0.3, 0, Y1, z - 0.3, z + 0.3, { front: { indigo: .6, purple: .5, blue: .25 }, side: { indigo: .75, purple: .55, blue: .3 }, top: {} });
+  // desks, far to near: a desk, monitors facing us, chairs in front
+  const screens = [];
+  for (let d = OFF.desks.length - 1; d >= 0; d--) {
+    const zd = OFF.desks[d], powered = rowOn(Math.min(OFF.rows.length - 1, d + 1)) > 0.5;
+    for (const xc of OFF.dx) {
+      box(xc - 0.64, xc + 0.64, 0, 0.74, zd, zd + 0.75, { front: { indigo: .7, purple: .45, blue: .35 }, top: { blue: .45, purple: .3, indigo: .3, aqua: .1 }, side: { indigo: .8, purple: .5, blue: .35 } });
+      for (const dx of [0]) {
+        const mx = xc + dx;
+        box(mx - 0.24, mx + 0.24, 0.76, 1.16, zd + 0.1, zd + 0.5, { front: { indigo: .75, purple: .55, midnight: .2 }, top: { indigo: .6, purple: .5 }, side: { indigo: .82, purple: .6, midnight: .25 } });
+        screens.push({ x: mx, z: zd + 0.098, on: powered, seed: d * 13 + xc * 3 + dx });
+      }
+    }
+    for (const xc of OFF.dx) P.paint(inPlane(zd - 0.42, tr(CHAIR, xc, 0)), { indigo: .88, purple: .7, midnight: .35 });
+  }
+  // screens: glass, bar graph of the low mids, cursor lines blinking on the hats
+  const glass = new Path2D(), bars = new Path2D(), lines = new Path2D(), lm = M.val('lowmid', t);
+  for (const s of screens) {
+    if (!s.on) continue;
+    rectZ(s.x - 0.2, 0.8, s.x + 0.2, 1.12, s.z, glass);
+    const r = rngFor('scr' + s.seed);
+    for (let b = 0; b < 7; b++) { const h = 0.02 + 0.2 * clamp(lm * (0.5 + r()) + 0.3 * st.kick * r(), 0, 1); rectZ(s.x - 0.17 + b * 0.048, 0.83, s.x - 0.14 + b * 0.048, 0.83 + h, s.z - 0.001, bars); }
+    for (let l = 0; l < 3; l++) rectZ(s.x - 0.17, 1.07 - l * 0.025, s.x - 0.17 + 0.08 + 0.18 * r(), 1.08 - l * 0.025, s.z - 0.001, lines);
+  }
+  P.paint(glass, { aqua: .75, blue: .35 }); P.paint(bars, { aqua: .3, sunflower: .75 }); P.paint(lines, PAPERW, 0.5 + 0.5 * st.hat);
+  // near props: plant by the door, water cooler
+  P.paint(inPlane(3.0, tr(PLANT, -1.35, 0, 1.3)), { aqua: .75, sunflower: .55, blue: .4 });
+  box(-1.55, -1.15, 0, 0.45, 2.8, 3.2, { front: { florange: .6, purple: .4 }, top: { indigo: .7 }, side: { florange: .7, purple: .55 } });
+  box(1.1, 1.45, 0, 0.95, 3.0, 3.35, { front: { indigo: .5, blue: .3, purple: .3 }, top: {}, side: { indigo: .6, blue: .35, purple: .4 } });
+  const jug = new Path2D(); jug.roundRect(1.13, 0.95, 0.29, 0.42, 0.1); P.paint(inPlane(3.15, jug), { aqua: .55, blue: .55 });
+  P.light(inPlane(3.14, circ(1.2 + 0.03 * Math.sin(t * 3), 1.0 + ((t * 0.6) % 0.3), 0.02)), 0.9);
+  // light: panels on paper, pools and haze; screen glow; the room brightens as rows come on
+  P.paint(panelsOn, mix({ aqua: .12 }, PAPERW, 0.4));
+  for (const pl of pools) {
+    const c = pj(0, 0, pl.z), cc = pj(0, Y1, pl.z), s = scz(pl.z);
+    if (c) glowE(c[0], c[1], 3.2 * s, 0.9 * s, { indigo: .8, blue: .6, purple: .6, midnight: .8 }, 0.22 * pl.a);
+    if (cc) glowE(cc[0], cc[1], 6 * s, 0.8 * s, 0.6, 0.45 * pl.a);
+  }
+  for (const s of screens) if (s.on) { const c = pj(s.x, 0.96, s.z); if (c) { const k = scz(s.z); glowE(c[0], c[1], 0.45 * k, 0.35 * k, C.aqua, 0.35, 'add'); glowE(c[0], c[1], 0.3 * k, 0.25 * k, 0.5, 0.35); } }
+  st.spill = { col: C.ice, a: 0.15 + 0.4 * pools.length / OFF.rows.length };
+}
+
+/* ── club, floor 48 (bars 21–28) ─────────────────────────────────────────────
+   The groove at full weight. An LED dance floor changes its pattern on every kick, the crowd drops on
+   the kick, a mirror ball throws spots round the room, laser fans from the booth flicker on the hats,
+   the LED wall behind the DJ fires a new frame on every kick, and a strobe hits on the claps (2 and 4). */
+const CLUB = { z0: CD + REV, zB: 20, X0: -8, X1: 8, Y1: 4.2 };
+const DANCERS = (() => {
+  const r = rngFor('dancers'), out = [];
+  for (let i = 0; i < 70; i++) {
+    const z = 4.0 + r() ** 0.8 * 10.5; let x = (r() * 2 - 1) * (1.0 + (z - 3.5) * 0.42);
+    if (z < 6 && Math.abs(x) < 0.45) x = Math.sign(x || 1) * (0.45 + r() * 0.3);
+    out.push({ x, z, h: 0.9 + r() * 0.18, up: r() < 0.38 ? 1 + (r() < 0.45) : 0, ph: r() * TAU, lean: (r() - 0.5) * 0.18, bob: 0.6 + r() * 0.7, w: 0.9 + r() * 0.25 });
+  }
+  return out.sort((a, b) => b.z - a.z);
+})();
+function limb(p, x0, y0, x1, y1, w0, w1) { const dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L; lpoly([[x0 + nx * w0, y0 + ny * w0], [x1 + nx * w1, y1 + ny * w1], [x1 - nx * w1, y1 - ny * w1], [x0 - nx * w0, y0 - ny * w0]], p); p.moveTo(x1 + w1, y1); p.arc(x1, y1, w1, 0, TAU); }
+function dancerPath(d, t, kick) {
+  const p = new Path2D(), h = d.h, dip = kick * 0.09 * d.bob, sw = 0.05 * Math.sin(t * 2.2 + d.ph), w = d.w;
+  const hip = 0.92 * h - dip, sh = 1.42 * h - dip;
+  limb(p, -0.1 * w, 0.02, -0.09 * w + sw * 0.3, hip, 0.065, 0.085); limb(p, 0.1 * w, 0.02, 0.09 * w + sw * 0.3, hip, 0.065, 0.085);
+  lpoly([[-0.16 * w + sw, hip], [0.16 * w + sw, hip], [0.22 * w + sw, sh], [-0.22 * w + sw, sh]], p);
+  p.moveTo(sw * 1.3 + 0.11 * h, 1.6 * h - dip); p.ellipse(sw * 1.3, 1.6 * h - dip, 0.1 * h, 0.12 * h, 0, 0, TAU);
+  const wave = Math.sin(t * 4.3 + d.ph);
+  if (d.up) {
+    const s = d.up === 2 ? 1 : -1;
+    limb(p, -0.2 * w + sw, sh - 0.03, -0.32 * w + sw + 0.05 * wave, sh + 0.32, 0.05, 0.045); limb(p, -0.32 * w + sw + 0.05 * wave, sh + 0.32, -0.26 * w + sw + 0.08 * wave, sh + 0.62 + 0.04 * wave, 0.045, 0.04);
+    if (d.up === 2 || s > 0) { limb(p, 0.2 * w + sw, sh - 0.03, 0.34 * w + sw - 0.05 * wave, sh + 0.3, 0.05, 0.045); limb(p, 0.34 * w + sw - 0.05 * wave, sh + 0.3, 0.3 * w + sw - 0.08 * wave, sh + 0.6 - 0.04 * wave, 0.045, 0.04); }
+    else { limb(p, 0.2 * w + sw, sh - 0.03, 0.27 * w + sw, sh - 0.3, 0.05, 0.045); limb(p, 0.27 * w + sw, sh - 0.3, 0.12 * w + sw, sh - 0.12 + 0.05 * wave, 0.045, 0.04); }
+  } else {
+    for (const s of [-1, 1]) { limb(p, s * 0.2 * w + sw, sh - 0.03, s * 0.28 * w + sw, sh - 0.32, 0.05, 0.045); limb(p, s * 0.28 * w + sw, sh - 0.32, s * 0.16 * w + sw, sh - 0.14 + 0.06 * Math.sin(t * 4.3 + d.ph + s), 0.045, 0.04); }
+  }
+  return tr(p, d.x, 0, 1, 1, d.lean * 0.4 + 0.04 * Math.sin(t * 1.1 + d.ph));
+}
+const CLUB_COLS = [C.pink, C.aqua, C.gold, { florange: 1 }, { pink: .6, aqua: .6 }];
+function clubScene(st) {
+  const t = st.t, sh = st.shot, n = kicksSince(sh.t0, t), { z0, zB, X0, X1, Y1 } = CLUB, lk = evAt(KICKS, t + LEAD);
+  const strobe = clapEnv(t, 0.07), kick = st.kick;
+  const night = { indigo: .88, purple: .72, midnight: .3 };
+  P.paint(rectZ(X0, 0, X1, Y1, zB), { indigo: .85, purple: .75, midnight: .3 });
+  // LED wall: a new frame fires outward on every kick
+  const wall = rectZ(-6.6, 0.55, 6.6, 4.15, zB - 0.02);
+  P.paint(wall, { purple: .6, pink: .42, indigo: .32 });
+  P.save(); P.clip(wall);
+  for (let r = lastOf(KICKS, t + LEAD), k = 0; r >= 0 && k < 5; r--, k++) {
+    const age = t + LEAD - KICKS[r].t, u = age / (3 * BEAT); if (u > 1) break;
+    const w = 0.3 + 5.2 * easeOutQuad(u), hgt = 0.2 + 3.4 * easeOutQuad(u), f = new Path2D();
+    rectZ(-w, 2.45 - hgt / 2, w, 2.45 + hgt / 2, zB - 0.03, f); rectZ(-w + 0.08 + 0.1 * (1 - u), 2.45 - hgt / 2 + 0.06 + 0.08 * (1 - u), w - 0.08 - 0.1 * (1 - u), 2.45 + hgt / 2 - 0.06 - 0.08 * (1 - u), zB - 0.03, f);
+    P.paint(f, CLUB_COLS[(KICKS[r].i) % 3], 1 - u * 0.6, 'evenodd');
+  }
+  const wc = pj(0, 2.45, zB); if (wc) glowE(wc[0], wc[1], 4 * scz(zB), 1.8 * scz(zB), CLUB_COLS[n % 3], 0.4 + 0.4 * kick, 'add');
+  P.restore();
+  // booth, DJ and speaker stacks
+  box(-1.7, 1.7, 0, 1.15, zB - 2.4, zB - 1.7, { front: night, top: { indigo: .7, purple: .6 }, side: night });
+  P.paint(rectZ(-1.7, 0.9, 1.7, 0.96, zB - 2.41), C.aqua);
+  const dj = new Path2D(), dk = kick * 0.06; dj.ellipse(0, 1.72 - dk, 0.12, 0.14, 0, 0, TAU); lpoly([[-0.28, 1.15], [0.28, 1.15], [0.24, 1.55 - dk], [-0.24, 1.55 - dk]], dj);
+  const armUp = clapEnv(t, 0.4) > 0.3; limb(dj, 0.22, 1.5 - dk, 0.42, armUp ? 2.0 : 1.3, 0.05, 0.045); limb(dj, -0.22, 1.5 - dk, -0.4, 1.28, 0.05, 0.045);
+  P.paint(inPlane(zB - 1.6, dj), night);
+  for (const sx of [-1, 1]) {
+    const x = sx * 4.4; box(x - 0.7, x + 0.7, 0, 3.0, zB - 2.2, zB - 1.2, { front: night, top: night, side: { indigo: .8, purple: .7 } });
+    const cones = new Path2D(); for (const [y, r] of [[0.6, 0.45], [1.6, 0.45], [2.5, 0.22]]) { circ(x, y, r * (1 + 0.06 * kick), cones); } P.paint(inPlane(zB - 2.21, cones), { indigo: .7, purple: .9, pink: .2 });
+  }
+  // shell
+  P.paint(rectY(X0, z0, X1, zB, Y1), night);
+  P.paint(rectX(z0, 0, zB, Y1, X0), { indigo: .8, purple: .8, pink: .1 }); P.paint(rectX(z0, 0, zB, Y1, X1), { indigo: .8, purple: .8, pink: .1 });
+  P.paint(rectY(X0, z0, X1, zB, 0), night);
+  // LED floor: patterns step on the kick
+  const tiles = CLUB_COLS.map(() => new Path2D()), glowT = new Path2D();
+  for (let i = -6; i < 6; i++) for (let j = 0; j < 14; j++) {
+    const x = i * 0.85, z = 3.2 + j * 0.85, pat = n % 4;
+    const on = pat === 0 ? (i + j + n) % 3 === 0 : pat === 1 ? Math.abs(i + 0.5) + j * 0.5 < ((n * 2) % 9) + 1 && Math.abs(i + 0.5) + j * 0.5 > ((n * 2) % 9) - 1 : pat === 2 ? (i * i + j) % 5 === n % 5 : (j + n) % 4 === 0;
+    if (!on) continue;
+    rectY(x + 0.04, z + 0.04, x + 0.81, z + 0.81, 0.002, tiles[(i + 6 + j + n) % 5]); rectY(x - 0.1, z - 0.1, x + 0.95, z + 0.95, 0.002, glowT);
+  }
+  P.add(glowT, { pink: .5, aqua: .3 }, 0.35 + 0.3 * kick);
+  tiles.forEach((p, k) => P.paint(p, CLUB_COLS[k], 0.75 + 0.25 * kick));
+  // mirror ball spots on walls and ceiling
+  const ball = [0, 3.45, 8.6], spots = new Path2D(), sr = rngFor('spots'), rot = t * 0.7;
+  for (let i = 0; i < 90; i++) {
+    const th = sr() * TAU + rot, ph = (sr() - 0.35) * 1.6, dx = Math.cos(ph) * Math.cos(th), dz = Math.cos(ph) * Math.sin(th), dy = Math.sin(ph);
+    let s = Infinity; if (dx) s = Math.min(s, ((dx > 0 ? X1 : X0) - ball[0]) / dx); if (dy > 0) s = Math.min(s, (Y1 - ball[1]) / dy); if (dy < 0) s = Math.min(s, (0 - ball[1]) / dy); if (dz) s = Math.min(s, ((dz > 0 ? zB : z0) - ball[2]) / dz);
+    const X = ball[0] + dx * s, Y = ball[1] + dy * s, Z = ball[2] + dz * s; if (Z < z0 + 0.2) continue;
+    const c = pj(X, Y, Z); if (c) circ(c[0], c[1], Math.max(1.2, 0.07 * scz(Z)), spots);
+  }
+  P.paint(spots, PAPERW, 0.85);
+  // backlight: the wall and the haze burn behind the crowd, so the dancers read as silhouettes
+  const bl = pj(0, 1.4, zB - 1.5); if (bl) { const k = scz(zB); glowE(bl[0], bl[1], 7.5 * k, 2.4 * k, 0.8, 1, 'light', 0, 0.5); glowE(bl[0], bl[1], 8 * k, 2.8 * k, CLUB_COLS[n % 3], 0.55 + 0.3 * kick, 'add', 0, 0.5); }
+  // the crowd, far to near, silhouettes with a rim from the wall
+  for (const d of DANCERS) {
+    const s = dancerPath(d, t, kick);
+    const rim = tr(s, -d.x * 0.06, 0.012, 1.06); P.paint(inPlane(d.z + 0.02, rim), mix(CLUB_COLS[Math.floor(d.ph * 3) % 3], PAPERW, 0.2));
+    P.paint(inPlane(d.z, s), mix({ purple: .7, indigo: .5, pink: .25 }, { indigo: .95, purple: .85, midnight: .45 }, clamp((14 - d.z) / 8, 0, 1)));
+  }
+  // lasers from the booth: fans that sweep, flicker on the hats, turn gold on the claps
+  const src = [0, 2.35, zB - 2.3], beams = new Path2D(), halo = new Path2D(), fan = 0.55 + 0.25 * Math.sin(t * 0.9);
+  const hatOn = st.hat > 0.12 || Math.floor(t * 8) % 2 === 0;
+  if (hatOn) for (let i = 0; i < 11; i++) {
+    const a = (i / 10 - 0.5) * 2 * fan + 0.35 * Math.sin(t * 1.3), e = 0.18 + 0.12 * Math.sin(t * 2 + i);
+    const dir = [Math.sin(a), e, -Math.cos(a)], s = (src[2] - 3.2) / Math.cos(a), end = [src[0] + dir[0] * s, src[1] + dir[1] * s * 0.6, 3.2];
+    const w0 = 0.01, w1 = 0.035;
+    poly([[src[0] - w0, src[1], src[2]], [src[0] + w0, src[1], src[2]], [end[0] + w1, end[1], end[2]], [end[0] - w1, end[1], end[2]]], beams);
+    poly([[src[0] - w0 * 4, src[1], src[2]], [src[0] + w0 * 4, src[1], src[2]], [end[0] + w1 * 5, end[1], end[2]], [end[0] - w1 * 5, end[1], end[2]]], halo);
+  }
+  const lcol = strobe > 0.3 ? C.gold : Math.floor(n / 4) % 2 ? C.aqua : C.pink;
+  P.add(halo, lcol, 0.3); P.paint(beams, mix(lcol, PAPERW, 0.35), 0.95);
+  // the ball itself
+  const bc = pj(ball[0], ball[1], ball[2]), br = 0.36 * scz(ball[2]);
+  if (bc) {
+    P.line(pline([pj(0, Y1, ball[2]), bc].filter(Boolean)), night, 1.5);
+    P.paint(circ(bc[0], bc[1], br), { indigo: .5, purple: .5, blue: .3 });
+    const fac = new Path2D(); for (let k = -3; k <= 3; k++) { const yy = bc[1] + k / 4 * br, ww = Math.sqrt(1 - (k / 4) ** 2) * br; fac.rect(bc[0] - ww, yy - 0.6, 2 * ww, 1.2); }
+    for (let k = 0; k < 6; k++) { const a = ((k / 6 + t * 0.12) % 1) * Math.PI; fac.ellipse(bc[0], bc[1], Math.abs(Math.cos(a)) * br + 0.5, br, 0, 0, TAU); }
+    P.line(fac, { indigo: .8, purple: .6 }, 1.2);
+    const sp = new Path2D(), fr = rngFor('facet' + Math.floor(t * 12)); for (let k = 0; k < 7; k++) { const a = fr() * TAU, rr = fr() * br * 0.9; circ(bc[0] + Math.cos(a) * rr, bc[1] + Math.sin(a) * rr, 1.5 + 2 * fr(), sp); }
+    P.paint(sp, PAPERW); glowE(bc[0], bc[1], br * 2.2, br * 2.2, 0.5, 0.5);
+  }
+  // haze, strobe
+  const hz = pj(0, 1.6, 10); if (hz) glowE(hz[0], hz[1], 0.7 * H, 0.35 * H, { pink: .4, purple: .2 }, 0.3 + 0.2 * kick, 'add');
+  if (strobe > 0.02) P.light(FULL, 0.9, strobe);
+  st.spill = { col: mix(lcol, C.pink, 0.5), a: 0.45 + 0.3 * kick + 0.4 * strobe };
+}
+
+/* ── aquarium, floor 64 (bars 33–40) ─────────────────────────────────────────
+   An acrylic tunnel through a big tank. A school circles the tunnel and darts on every kick, kelp sways
+   with the bass, caustics shimmer with the highs, bubbles rise on the hats, jellies pulse on the claps.
+   A manta sails over the tunnel toward us (bars 35–38), a shark crosses as the doors close (39–40).   */
+const AQ = { z0: CD + REV, zB: 34 };
+const KELP = (() => { const r = rngFor('kelp'), out = []; for (let i = 0; i < 26; i++) { const s = r() < 0.5 ? -1 : 1; out.push({ x: s * (2.2 + r() * 5), z: 3.5 + r() * 22, h: 2.5 + r() * 4, ph: r() * TAU, w: 0.07 + r() * 0.07 }); } return out.sort((a, b) => b.z - a.z); })();
+const ROCKS = (() => { const r = rngFor('rocks'), out = []; for (let i = 0; i < 18; i++) { const s = r() < 0.5 ? -1 : 1; out.push({ x: s * (1.9 + r() * 4.5), z: 3 + r() * 24, r: 0.35 + r() * 0.9, seed: r(), coral: r() < 0.7, col: [C.pink, { florange: 1 }, C.gold, C.magenta][Math.floor(r() * 4)] }); } return out.sort((a, b) => b.z - a.z); })();
+const SCHOOL = (() => { const r = rngFor('aqschool'), out = []; for (let i = 0; i < 220; i++) out.push({ a: r() * TAU, rr: 2.4 + r() * 1.4, z: 7 + r() * 9, sp: 0.35 + r() * 0.25, ph: r() * TAU, s: 0.12 + r() * 0.1 }); return out; })();
+function tunnelArc(z, R = 1.65, yb = 1.0, p) { p = p || new Path2D(); const pts = [[-R, 0, z], [-R, yb, z]]; for (let i = 1; i < 16; i++) { const a = Math.PI - i / 16 * Math.PI; pts.push([Math.cos(a) * R, yb + Math.sin(a) * R, z]); } pts.push([R, yb, z], [R, 0, z]); const q = pts.map(v => pj(...v)).filter(Boolean); q.forEach((v, i) => i ? p.lineTo(v[0], v[1]) : p.moveTo(v[0], v[1])); return p; }
+function fishSide(p, x, y, L, dir, wag) {
+  const pts = [[0.5, 0], [0.38, -0.12], [0.1, -0.2], [-0.2, -0.15], [-0.36, -0.05], [-0.58, -0.22 + wag * 0.06], [-0.5, 0.0], [-0.58, 0.22 + wag * 0.06], [-0.36, 0.05], [-0.2, 0.13], [0.1, 0.17], [0.38, 0.1]];
+  lpoly(pts.map(([u, v]) => [x + dir * u * L, y - v * L]), p);
+  lpoly([[0.12, -0.18], [-0.02, -0.34], [-0.14, -0.16]].map(([u, v]) => [x + dir * u * L, y - v * L]), p);
+  return p;
+}
+function aquariumScene(st) {
+  const t = st.t, { z0, zB } = AQ, kick = st.kick, hi = st.high;
+  const water = [[0, { aqua: .45, blue: .2 }, 1], [0.35, { aqua: .7, blue: .5 }, 1], [0.7, { aqua: .6, blue: .85, indigo: .25 }, 1], [1, { blue: .9, indigo: .55, aqua: .3 }, 1]];
+  P.paintG(FULL, lgrad(0, 0, 0, H, water));
+  // rays from the surface
+  const rays = new Path2D();
+  for (let i = 0; i < 7; i++) { const x = 90 + i * 160 + 60 * Math.sin(t * 0.3 + i * 1.7), w = 30 + 25 * Math.sin(t * 0.5 + i); rays.moveTo(x - w, -20); rays.lineTo(x + w, -20); rays.lineTo(x + w * 3 - 180, H * 0.75); rays.lineTo(x - w * 3 - 180, H * 0.75); rays.closePath(); }
+  P.lightG(rays, lgrad(0, 0, 0, H * 0.75, [[0, 0.35 + 0.15 * hi], [1, 0]]), 1);
+  // sand, rocks with coral, kelp
+  const hz = pj(0, -0.3, zB);
+  P.paintG(rectY(-30, z0, 30, zB + 40, -0.3), lgrad(0, hz ? hz[1] : HC, 0, H, [[0, { aqua: .55, blue: .6 }, 1], [0.4, { aqua: .45, blue: .45, sunflower: .2 }, 1], [1, { aqua: .5, blue: .5, sunflower: .3, purple: .1 }, 1]]));
+  for (const k of KELP) {
+    const sway = (0.25 + 0.35 * st.bass) * Math.sin(t * 0.9 + k.ph), pts = [];
+    for (let i = 0; i <= 12; i++) { const u = i / 12; pts.push([k.x + sway * u * u + 0.12 * Math.sin(u * 7 + t * 1.3 + k.ph), -0.3 + u * k.h]); }
+    const L = [], R = []; pts.forEach(([x, y], i) => { const w = k.w * (1 - 0.6 * i / 12) * (1 + 0.5 * Math.sin(i * 1.3 + k.ph)); L.push([x - w, y]); R.push([x + w, y]); });
+    const fog = clamp((k.z - 4) / 22, 0, 1);
+    P.paint(inPlane(k.z, lpoly([...L, ...R.reverse()])), mix({ aqua: .8, sunflower: .7, blue: .35 }, { aqua: .55, blue: .7 }, fog));
+  }
+  for (const rk of ROCKS) {
+    const r = rngFor('rk' + rk.seed), pts = []; for (let i = 0; i < 9; i++) { const a = Math.PI * i / 8; pts.push([rk.x + Math.cos(a) * rk.r * (0.8 + 0.3 * r()), -0.3 + Math.sin(a) * rk.r * (0.5 + 0.3 * r())]); }
+    const fog = clamp((rk.z - 4) / 22, 0, 1);
+    P.paint(inPlane(rk.z, lpoly(pts)), mix({ blue: .7, indigo: .55, purple: .3 }, { blue: .7, aqua: .5 }, fog));
+    if (rk.coral) { const cp = new Path2D(); for (let i = 0; i < 6; i++) { const bx = rk.x + (r() - 0.5) * rk.r, by = -0.3 + rk.r * (0.4 + 0.3 * r()), a = -Math.PI / 2 + (r() - 0.5) * 1.2, L = 0.2 + r() * 0.35; limb(cp, bx, by, bx + Math.cos(a) * L * 0.3 + 0.05 * Math.sin(t + i), by - Math.sin(a) * L, 0.035, 0.02); } P.paint(inPlane(rk.z - 0.05, cp), mix(rk.col, { aqua: .5, blue: .6 }, fog * 0.8)); }
+  }
+  // shark crossing late, behind the tunnel
+  const shU = phase(t, T(39), 2 * BAR); if (shU > 0 && shU < 1) { const p = new Path2D(), x = lerp(-9, 9, shU); fishSide(p, x, 2.1 + 0.2 * Math.sin(t), 2.6, 1, Math.sin(t * 3)); P.paint(inPlane(9.5, p), { blue: .75, indigo: .6, purple: .3 }); }
+  // jellies drifting up, pulsing on the claps
+  for (let i = 0; i < 6; i++) {
+    const z = 5 + i * 2.3, x = (i % 2 ? 1 : -1) * (2.1 + (i * 0.7) % 1.8), y = 0.6 + ((t * 0.12 + i * 0.37) % 1) * 3.4, pul = 1 - 0.22 * clapEnv(t - i * 0.03, 0.3);
+    const bell = new Path2D(); bell.ellipse(x, y, 0.28 * (2 - pul), 0.22 * pul, 0, Math.PI, TAU); bell.closePath();
+    const ten = new Path2D(); for (let k = 0; k < 5; k++) { const bx = x - 0.2 + k * 0.1; ten.moveTo(bx, y); ten.quadraticCurveTo(bx + 0.08 * Math.sin(t * 2 + k), y - 0.35, bx + 0.05 * Math.sin(t * 1.5 + k), y - 0.8); }
+    const c = pj(x, y, z); if (c) glowE(c[0], c[1], 0.6 * scz(z), 0.6 * scz(z), C.pink, 0.4, 'add');
+    P.line(inPlane(z, ten), { pink: .8 }, Math.max(1, 0.012 * scz(z)), 0.8); P.paint(inPlane(z, bell), mix(C.pink, PAPERW, 0.25));
+  }
+  // the school round the tunnel: tangent dashes, the ring snaps inward on the kick
+  const fish = new Path2D(), fishD = new Path2D(), ring = 1 - 0.18 * kick;
+  for (const f of SCHOOL) {
+    const a = f.a + t * f.sp + 0.3 * st.kickL, R = f.rr * ring, x = Math.cos(a) * R * 1.3, y = 1.2 + Math.sin(a) * R, z = f.z + 0.4 * Math.sin(t * 0.4 + f.ph);
+    if (y < -0.2) continue;
+    const c = pj(x, y, z), c2 = pj(x - Math.sin(a) * f.s * 1.3, y + Math.cos(a) * f.s, z); if (!c || !c2) continue;
+    const dx = c2[0] - c[0], dy = c2[1] - c[1], w = Math.max(0.8, Math.hypot(dx, dy) * 0.28);
+    const p = (f.ph > 3.5) ? fishD : fish; p.moveTo(c[0] - dx, c[1] - dy); p.lineTo(c[0] - dy * 0.3 / 1, c[1] + dx * 0.3); p.lineTo(c[0] + dx, c[1] + dy); p.lineTo(c[0] + dy * 0.3, c[1] - dx * 0.3); p.closePath();
+  }
+  P.paint(fishD, { blue: .5, indigo: .5, aqua: .3 }); P.paint(fish, mix(PAPERW, { aqua: .35 }, 0.5));
+  // walkway and tunnel ribs
+  P.paint(rectY(-0.95, z0, 0.95, zB, 0), { indigo: .5, blue: .55, aqua: .2 });
+  const guide = new Path2D(); for (let z = z0; z < zB; z += 0.5) { rectY(-0.93, z, -0.88, z + 0.12, 0.003, guide); rectY(0.88, z, 0.93, z + 0.12, 0.003, guide); }
+  P.paint(guide, C.aqua);
+  const ribs = new Path2D(); for (let z = 3.0; z < zB; z += 2.5) tunnelArc(z, 1.65, 1.0, ribs);
+  P.line(ribs, { indigo: .8, blue: .6, purple: .3 }, 3);
+  const top = new Path2D(); for (const x of [-0.35, 0.35]) poly([[x - 0.03, 2.62, z0 + 0.3], [x + 0.03, 2.62, z0 + 0.3], [x + 0.03, 2.62, zB], [x - 0.03, 2.62, zB]], top);
+  P.light(top, 0.35);
+  // caustics on walkway and sand
+  const cau = new Path2D();
+  for (let i = 0; i < 28; i++) { const pts = []; for (let k = 0; k <= 16; k++) { const z = z0 + k * 1.1, x = -4 + i * 0.3 + 0.25 * Math.sin(z * 1.7 + t * 1.6 + i) + 0.15 * Math.sin(z * 3.1 - t * 2.3); const q = pj(x, x > -0.95 && x < 0.95 ? 0.004 : -0.296, z); if (q) pts.push(q); } pline(pts, cau); }
+  P.line(cau, 0.5, 1.6, 0.25 + 0.35 * hi, 2);
+  // bubbles on the hats
+  const bub = new Path2D();
+  for (let r = lastOf(HATS, t + LEAD), k = 0; r >= 0 && k < 12; r--, k++) { const h = HATS[r], age = t + LEAD - h.t; if (age > 3) break; const g = rngFor('bub' + h.i), x = (g() < 0.5 ? -1 : 1) * (1.8 + g() * 0.5), z = 3 + g() * 6, y = -0.2 + age * 1.1, c = pj(x + 0.05 * Math.sin(age * 5), y, z); if (c) { const rr = Math.max(1.5, 0.03 * scz(z)); bub.moveTo(c[0] + rr, c[1]); bub.arc(c[0], c[1], rr, 0, TAU); } }
+  P.line(bub, PAPERW, 1.4, 0.8);
+  // manta over the tunnel, coming at us
+  const mU = phase(t, T(35), 4 * BAR);
+  if (mU > 0 && mU < 1) {
+    const z = lerp(24, 1.2, easeInQuad(mU)), y = 3.5 + 0.2 * Math.sin(t), flap = Math.sin((t - T(35)) / (2 * BEAT) * Math.PI) * (0.8 + 0.2 * kick);
+    const m = new Path2D(), S = 1.6; lpoly([[0, y + 0.9 * S], [1.9 * S, y + 0.15 * S + flap * 0.5], [0.4 * S, y - 0.35 * S], [0.12 * S, y - 0.4 * S], [0, y - 1.6 * S], [-0.12 * S, y - 0.4 * S], [-0.4 * S, y - 0.35 * S], [-1.9 * S, y + 0.15 * S + flap * 0.5]], m);
+    const belly = new Path2D(); belly.ellipse(0, y + 0.1 * S, 0.45 * S, 0.5 * S, 0, 0, TAU);
+    P.paint(inPlane(z, m), { blue: .7, indigo: .65, purple: .35 }); P.paint(inPlane(z - 0.01, belly), { aqua: .3, blue: .25 });
+  }
+  const cc = pj(0, 1.4, 8); if (cc) glowE(cc[0], cc[1], 0.9 * H, 0.5 * H, { aqua: .5 }, 0.25, 'add');
+  st.spill = { col: { aqua: .9, blue: .4 }, a: 0.45 + 0.15 * hi };
+}
+
+/* ── jungle, floor 80 (bars 45–52) ───────────────────────────────────────────
+   An office floor the jungle took back. Foliage in depth layers with mist between them, light pouring
+   through holes in the ceiling, lianas swaying with the bass, near leaves bouncing on the kick,
+   fireflies blinking on the hats, flowers pulsing on the claps, eyes in the dark from bar 49, a pair of
+   parrots crossing in bars 49–50, an old monitor still glowing under the moss.                     */
+const JUN = { z0: CD + REV, zB: 22, Y1: 3.2 };
+function catmull(pts, n) {
+  const out = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(pts.length - 1, i + 2)];
+    for (let k = 0; k < n; k++) { const u = k / n, u2 = u * u, u3 = u2 * u; out.push([0, 1].map(j => 0.5 * (2 * p1[j] + (p2[j] - p0[j]) * u + (2 * p0[j] - 5 * p1[j] + 4 * p2[j] - p3[j]) * u2 + (3 * p1[j] - p0[j] - 3 * p2[j] + p3[j]) * u3))); }
+  }
+  out.push(pts[pts.length - 1].slice()); return out;
+}
+/* Monstera leaf, petiole at the origin, tip at (0, 1): heart-shaped base with a sinus, pinnate splits from
+   the edge toward the midrib (angled to the tip), a row of holes beside the midrib. Fill with evenodd.   */
+const MONSTERA = (() => {
+  const L = catmull([[0, 0.13], [-0.2, 0.0], [-0.4, 0.1], [-0.52, 0.4], [-0.44, 0.72], [-0.22, 0.93], [0, 1]], 12), edge = [];
+  const slits = new Set([17, 23, 29, 35, 41, 47, 53]);
+  L.forEach(([x, y], i) => {
+    edge.push([x, y]);
+    if (slits.has(i)) { const d = 0.28 + 0.1 * Math.sin(i); edge.push([x * d, y + 0.06], [x * d, y + 0.085], [L[i + 1][0] * 0.99, L[i + 1][1] + 0.012]); }
+  });
+  const pts = [...edge, ...edge.slice(0, -1).reverse().map(([x, y]) => [-x, y])];
+  const p = lpoly(pts);
+  for (const [y, s] of [[0.3, -1], [0.42, 1], [0.52, -1], [0.62, 1], [0.36, 1], [0.58, -1]]) { p.moveTo(s * 0.11 + 0.035, y); p.ellipse(s * 0.11, y, 0.035, 0.016, s * 0.5, 0, TAU); }
+  return p;
+})();
+const MIDRIB = (() => { const p = new Path2D(); p.moveTo(0, 0.13); p.quadraticCurveTo(0.02, 0.6, 0, 0.97); for (let k = 0; k < 7; k++) { const y = 0.24 + k * 0.1; p.moveTo(0, y); p.quadraticCurveTo(-0.15, y + 0.05, -0.34 + 0.02 * k, y + 0.09); p.moveTo(0, y); p.quadraticCurveTo(0.15, y + 0.05, 0.34 - 0.02 * k, y + 0.09); } return p; })();
+function frond(p, x, y, L, ang, droop, n, lw) {
+  let px = x, py = y, a = ang;
+  for (let i = 0; i < n; i++) {
+    const u = i / n, seg = L / n, nx = px + Math.cos(a) * seg, ny = py + Math.sin(a) * seg;
+    for (const s of [-1, 1]) { const la = a + s * (1.2 - 0.4 * u) - droop * 0.6, ll = L * 0.28 * Math.sin(Math.PI * (0.15 + 0.85 * u)); lpoly([[nx, ny], [nx + Math.cos(la) * ll * 0.5 + Math.cos(a) * lw, ny + Math.sin(la) * ll * 0.5 + Math.sin(a) * lw], [nx + Math.cos(la) * ll, ny + Math.sin(la) * ll], [nx + Math.cos(a) * seg * 0.6, ny + Math.sin(a) * seg * 0.6]], p); }
+    px = nx; py = ny; a -= droop / n * 2;
+  }
+  return p;
+}
+const JPLANTS = (() => {
+  // Walls of foliage either side of a narrow path, thinning into mist; trunks only far back.
+  const r = rngFor('jungle'), out = [];
+  for (let i = 0; i < 170; i++) {
+    const z = 2.9 + r() ** 1.3 * 15, side = r() < 0.5 ? -1 : 1, x = side * (0.85 + 0.07 * z + r() ** 1.3 * (0.7 + z * 0.14)), q = r();
+    const kind = z > 9 && q < 0.14 ? 'trunk' : q < 0.55 ? 'monstera' : q < 0.82 ? 'fern' : 'palm';
+    out.push({ kind, x, z, s: (kind === 'palm' ? 1.1 : 0.8) + r() * 0.8, ph: r() * TAU, rot: side * (0.05 + r() * 0.6), flower: r() < 0.22, tone: r() });
+  }
+  for (const [x, z, s2, rot] of [[-0.82, 2.2, 0.85, -0.85], [0.86, 2.25, 0.8, 0.9], [-0.7, 2.75, 0.6, -0.4], [0.72, 2.95, 0.62, 0.45]]) out.push({ kind: 'monstera', x, z, s: s2, ph: x * 7, rot, flower: false, near: 1, tone: 0.3 });
+  return out.sort((a, b) => b.z - a.z);
+})();
+const LIANAS = (() => { const r = rngFor('lianas'), out = []; for (let i = 0; i < 16; i++) out.push({ x: (r() * 2 - 1) * 3.5, z: 3 + r() * 14, L: 1.2 + r() * 1.8, ph: r() * TAU }); return out.sort((a, b) => b.z - a.z); })();
+const MIST = { aqua: .45, blue: .35, sunflower: .12 };
+function jungleScene(st) {
+  const t = st.t, { z0, zB, Y1 } = JUN, kick = st.kick, bass = st.bass;
+  P.paintG(FULL, lgrad(0, 0, 0, H, [[0, { aqua: .5, blue: .55, indigo: .2 }, 1], [0.5, { aqua: .45, blue: .35, sunflower: .15 }, 1], [1, { aqua: .6, blue: .5, sunflower: .3, indigo: .2 }, 1]]));
+  // the far end: the facade is gone, dawn light pours in through a ragged opening
+  const gap = new Path2D(); lpoly([[-2.6, 0], [-2.4, 1.2], [-2.8, 2.2], [-1.6, 2.9], [0.3, 2.7], [1.5, 3.0], [2.7, 2.1], [2.3, 1.0], [2.8, 0]], gap);
+  P.paint(rectZ(-12, 0, 12, Y1, zB), { aqua: .55, blue: .6, indigo: .35 });
+  P.paintG(inPlane(zB - 0.01, gap), lgrad(0, (pj(0, 3, zB) || [0, HC - 60])[1], 0, (pj(0, 0, zB) || [0, HC + 40])[1], [[0, { sunflower: .35, aqua: .2 }, 1], [0.6, { sunflower: .15 }, 1], [1, { sunflower: .3, aqua: .25 }, 1]]));
+  const far = pj(0, 1.3, zB); if (far) { glowE(far[0], far[1], 0.55 * H, 0.4 * H, 0.7, 0.9, 'light', 0, 0.45); glowE(far[0], far[1], 0.6 * H, 0.45 * H, C.sun, 0.35, 'add'); }
+  P.paint(rectY(-12, z0, 12, zB, 0), { aqua: .75, sunflower: .45, blue: .55, indigo: .5 });
+  const path = new Path2D(); for (let z = z0; z < zB; z += 0.6) for (let x = -0.6; x < 0.6; x += 0.6) if (rngFor('tile' + x + z)() < 0.3) rectY(x + 0.05, z + 0.05, x + 0.52, z + 0.52, 0.002, path);
+  P.paint(path, { blue: .5, indigo: .5, purple: .3, aqua: .15 });
+  // undergrowth along the path: low fronds and moss speckle
+  const under = new Path2D(), ur = rngFor('under');
+  for (let i = 0; i < 200; i++) { const z = 2.2 + ur() ** 1.3 * 14, side = ur() < 0.5 ? -1 : 1, x = side * (0.4 + ur() * 1.5 + z * 0.06), L = 0.3 + ur() * 0.5; const f = new Path2D(); for (let k = 0; k < 4; k++) frond(f, x, 0, L, Math.PI / 2 + (k - 1.5) * 0.5 - side * 0.3 + 0.1 * Math.sin(t + i), 1.3, 6, 0.01); inPlane(z, f, under); }
+  P.paint(under, { aqua: .7, sunflower: .92, blue: .08 });
+  const moss = new Path2D(), mr = rngFor('moss'); for (let i = 0; i < 500; i++) { const z = 2.1 + mr() * 12, x = (mr() * 2 - 1) * 3.5, c = pj(x, 0.003, z); if (c) circ(c[0], c[1], Math.max(0.8, 0.02 * scz(z)), moss); }
+  P.paint(moss, { aqua: .85, sunflower: .8, blue: .5, indigo: .2 });
+  P.paint(rectY(-12, z0, 12, zB, Y1), { indigo: .7, blue: .5, aqua: .3 });
+  const holes = [[-1.2, 5, 1.2, 1.2], [0.8, 9, 1.8, 1.2], [-2, 13, 1.2, 1.8]], hp = new Path2D();
+  for (const [x, z, w, d] of holes) rectY(x, z, x + w, z + d, Y1 - 0.001, hp);
+  P.paint(hp, { sunflower: .25, aqua: .2 });
+  const cg = new Path2D(); for (let z = z0; z < zB; z += 0.6) rectY(-12, z, 12, z + 0.02, Y1 - 0.002, cg); for (let x = -12; x < 12; x += 0.6) rectY(x, z0, x + 0.02, zB, Y1 - 0.002, cg); P.paint(cg, { indigo: .8, blue: .5 });
+  // god rays from the holes
+  for (const [x, z, w, d] of holes) { const a = pj(x + w / 2, Y1, z + d / 2), b = pj(x + w / 2 - 0.8, 0, z + d / 2 + 1); if (a && b) { const len = Math.hypot(b[0] - a[0], b[1] - a[1]), rot = Math.atan2(b[1] - a[1], b[0] - a[0]); glowE((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, len * 0.6, w * scz(z) * 0.7, 0.5, 0.6, 'light', rot, 0.5); glowE((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, len * 0.6, w * scz(z) * 0.8, C.sun, 0.35, 'add', rot, 0.5); } }
+  // plants, far to near, fogged by distance
+  const eyesZ = 9, sway = 0.06 + 0.12 * bass;
+  let eyesDone = false;
+  for (const pl of JPLANTS) {
+    if (!eyesDone && pl.z < eyesZ) { eyesDone = true; eyes(st, eyesZ); }
+    const fog = clamp((pl.z - 3) / 18, 0, 1) ** 0.8, bounce = pl.near ? 1 + 0.05 * kick : 1, sw = sway * Math.sin(t * 1.2 + pl.ph) * (pl.near ? 0.5 : 1);
+    let p = new Path2D(), col;
+    if (pl.kind === 'monstera') {
+      const leaves = [];
+      for (let k = 0; k < 3; k++) {
+        const a = pl.rot + Math.sign(pl.x) * (k * 0.55 - 0.35) + sw, L = pl.s * (0.5 + 0.22 * k), bx = pl.x + Math.sin(a) * L, by = Math.cos(a) * L * 0.95, sc2 = pl.s * (0.55 + 0.12 * k) * bounce;
+        limb(p, pl.x, 0, bx, by, 0.016 * pl.s, 0.011 * pl.s);
+        leaves.push([bx, by, sc2, -a * 1.35]);
+      }
+      const lc = pl.near ? { aqua: .9, sunflower: .6, blue: .65, indigo: .3 } : mix({ aqua: .8, sunflower: .85, blue: .12 }, { aqua: .9, sunflower: .5, blue: .55, indigo: .15 }, pl.tone);
+      P.paint(inPlane(pl.z, p), mix(lc, MIST, fog * 0.85));
+      for (const [bx, by, sc2, rot] of leaves) {
+        P.paint(inPlane(pl.z, tr(MONSTERA, bx, by, sc2, sc2, rot)), mix(lc, MIST, fog * 0.85), 1, 'evenodd');
+        if (fog < 0.7) P.line(inPlane(pl.z, tr(MIDRIB, bx, by, sc2, sc2, rot)), 0.35 * (1 - fog), Math.max(0.8, 0.012 * sc2 * scz(pl.z)), 1, 2);
+      }
+      p = null; col = lc;
+    } else if (pl.kind === 'palm') {
+      const top = 1.3 * pl.s; limb(p, pl.x, 0, pl.x + sw * 2, top, 0.06 * pl.s, 0.04 * pl.s);
+      for (let k = 0; k < 7; k++) frond(p, pl.x + sw * 2, top, 1.1 * pl.s * bounce, Math.PI / 2 + (k - 3) * 0.45 + sw, 1.1 + 0.2 * Math.sin(k), 9, 0.02);
+      col = { aqua: .8, sunflower: .8, blue: .2 };
+    } else if (pl.kind === 'fern') {
+      for (let k = 0; k < 6; k++) frond(p, pl.x, 0, 0.8 * pl.s, Math.PI / 2 + (k - 2.5) * 0.35 + sw, 1.4, 8, 0.015);
+      col = { aqua: .7, sunflower: .85, blue: .15 };
+    } else { limb(p, pl.x, 0, pl.x + 0.1, Y1, 0.18 * pl.s, 0.14 * pl.s); col = { indigo: .6, blue: .5, purple: .35, aqua: .2 }; }
+    const fc = mix(col, MIST, fog * 0.85);
+    if (p) P.paint(inPlane(pl.z, p), fc, 1, 'evenodd');
+    if (pl.flower) { const fl = new Path2D(), fx = pl.x + 0.3 * pl.s, fy = 0.7 * pl.s, pul = 1 + 0.25 * clapEnv(t, 0.3); for (let k = 0; k < 5; k++) { const a = k / 5 * TAU + pl.ph; fl.moveTo(fx, fy); fl.ellipse(fx + Math.cos(a) * 0.08 * pul, fy + Math.sin(a) * 0.08 * pul, 0.08 * pul, 0.045 * pul, a, 0, TAU); } P.paint(inPlane(pl.z - 0.01, fl), mix(pl.ph > 3 ? C.pink : { florange: 1, pink: .3 }, MIST, fog * 0.6)); P.paint(inPlane(pl.z - 0.02, circ(fx, fy, 0.025 * pul)), C.sun); }
+    if (pl.z < 12 && pl.z > 6 && Math.abs(pl.x) < 2.6 && pl.kind === 'trunk') { /* mist sits between layers */ }
+  }
+  // lianas from the ceiling
+  const li = new Path2D(), lv = new Path2D();
+  for (const l of LIANAS) { const sw2 = (0.1 + 0.25 * bass) * Math.sin(t * 0.8 + l.ph), pts = []; for (let i = 0; i <= 10; i++) { const u = i / 10; pts.push([l.x + sw2 * u * u + 0.05 * Math.sin(u * 6 + l.ph), Y1 - u * l.L]); } const q = pts.map(([x, y]) => pj(x, y, l.z)).filter(Boolean); pline(q, li); for (let i = 3; i < 10; i += 2) { const [x, y] = pts[i], c = pj(x, y, l.z); if (c) { const r2 = 0.05 * scz(l.z); lv.moveTo(c[0], c[1]); lv.ellipse(c[0] + r2, c[1], r2, r2 * 0.5, (i % 4 ? 0.6 : -0.6), 0, TAU); } } }
+  P.line(li, { aqua: .6, sunflower: .5, blue: .5, indigo: .3 }, 2.2); P.paint(lv, { aqua: .8, sunflower: .7, blue: .3 });
+  // the old monitor under the moss
+  box(1.4, 2.6, 0, 0.72, 5.6, 6.3, { front: { aqua: .55, blue: .5, indigo: .4 }, top: { aqua: .7, sunflower: .5, blue: .4 }, side: { aqua: .6, blue: .5, indigo: .45 } });
+  P.paint(rectZ(1.75, 0.75, 2.2, 1.1, 5.95), { indigo: .7, blue: .5 }); P.paint(rectZ(1.79, 0.79, 2.16, 1.06, 5.94), { aqua: .7, blue: .2 }, 0.6 + 0.4 * rngFor('mon' + Math.floor(t * 10))());
+  // parrots (bars 49–50)
+  const pU = phase(t, T(49), 2 * BAR);
+  if (pU > 0 && pU < 1) for (let k = 0; k < 2; k++) {
+    const x = lerp(5, -5, pU) + k * 0.8, y = 2.3 + 0.2 * Math.sin(t * 3 + k) - k * 0.25, z = 6.5 + k, f = Math.sin(t * 22 + k * 2);
+    const b = new Path2D(); b.ellipse(x, y, 0.22, 0.08, 0.1, 0, TAU); lpoly([[x + 0.18, y], [x + 0.55, y - 0.05], [x + 0.2, y + 0.03]], b);
+    const wg = new Path2D(); lpoly([[x - 0.05, y + 0.03], [x + 0.1, y + 0.03], [x + 0.02 + 0.1 * f, y + 0.4 * f]], wg);
+    P.paint(inPlane(z, b), C.red); P.paint(inPlane(z - 0.01, wg), { aqua: .9, blue: .6 }); P.paint(inPlane(z - 0.02, circ(x - 0.19, y + 0.02, 0.025)), C.sun);
+  }
+  // fireflies on the hats
+  const ff = new Path2D(), fr = rngFor('fireflies'), recent = [];
+  for (let r = lastOf(HATS, t + LEAD), k = 0; r >= 0 && k < 8; r--, k++) recent.push(HATS[r]);
+  for (let i = 0; i < 60; i++) {
+    const x = (fr() * 2 - 1) * 3.2 + 0.2 * Math.sin(t * 0.5 + i), y = 0.3 + fr() * 2.4 + 0.15 * Math.sin(t * 0.7 + i * 2), z = 3.2 + fr() * 11;
+    let b = 0.15; for (const h of recent) if (h.i % 9 === i % 9) b = Math.max(b, h.s * Math.exp(-(t + LEAD - h.t) * 6));
+    const c = pj(x, y, z); if (!c || b < 0.1) continue;
+    glowE(c[0], c[1], 0.25 * scz(z) * b + 2, 0.25 * scz(z) * b + 2, C.sun, 0.6 * b, 'add');
+    circ(c[0], c[1], Math.max(1.3, 0.018 * scz(z)) * (0.6 + b), ff);
+  }
+  P.paint(ff, mix(C.sun, PAPERW, 0.4));
+  st.spill = { col: { aqua: .6, sunflower: .7 }, a: 0.35 };
+}
+function eyes(st, z) {
+  const t = st.t; if (t < T(49)) return;
+  const pairs = [[-1.25, 0.75, T(49)], [1.35, 1.05, T(51)]];
+  for (const [x, y, t0] of pairs) {
+    if (t < t0) continue;
+    const k = evAt(KICKS, t + LEAD), blink = k && k.down && k.age < 0.12 ? 0.15 : 1, open = smooth(phase(t, t0, BEAT)) * blink, e = new Path2D();
+    for (const s of [-1, 1]) { e.moveTo(x + s * 0.13 + 0.07, y); e.ellipse(x + s * 0.13, y, 0.07, 0.045 * open, s * 0.15, 0, TAU); }
+    const c = pj(x, y, z); if (c) glowE(c[0], c[1], 0.6 * scz(z), 0.25 * scz(z), C.gold, 0.5 * open, 'add');
+    P.paint(inPlane(z, e), C.gold);
+    const pu = new Path2D(); for (const s of [-1, 1]) pu.rect(x + s * 0.13 - 0.008, y - 0.04 * open, 0.016, 0.08 * open); P.paint(inPlane(z - 0.01, pu), { indigo: .9, purple: .8 });
+  }
+}
+
+/* ── empty floor, 96 (bars 57–60) ─────────────────────────────────────────────
+   Bare concrete, open to the night at the far end. One bulb on a wire swings a full cycle every four
+   beats; its light pool slides with it; plastic sheeting billows; dust hangs in the light; one office
+   chair left behind. The highs are out here, so nothing sparkles; the kick only breathes the bulb.  */
+const EMP = { z0: CD + REV, zE: 27, Y1: 3.1 };
+function emptyScene(st) {
+  const t = st.t, { z0, zE, Y1 } = EMP, kick = st.kick;
+  cityBackdrop(70, -60, 60, -8, 40, EYE - 0.2, t, { scale: 1.1, dx: -8, hs: 1.3 });
+  P.paint(rectY(-14, z0, 14, zE, 0), { indigo: .8, purple: .55, midnight: .42, blue: .2 });
+  const joints = new Path2D(); for (let z = z0; z < zE; z += 3) rectY(-14, z, 14, z + 0.02, 0.001, joints); for (let x = -12; x < 14; x += 3) rectY(x, z0, x + 0.02, zE, 0.001, joints); P.paint(joints, { indigo: .8, purple: .55, midnight: .5 });
+  const pud = new Path2D(); pud.ellipse(-1.8, 0, 1.2, 0.3, 0, 0, TAU); const pw = inPlane(0, new Path2D()); P.paint(rectY(-2.9, 13, -0.8, 14.2, 0.002), { pink: .45, purple: .4, indigo: .2 });
+  P.paint(rectY(-14, z0, 14, zE, Y1), { indigo: .85, purple: .6, midnight: .5 });
+  for (let z = 5; z < zE; z += 5) box(-14, 14, Y1 - 0.45, Y1, z - 0.2, z + 0.2, { front: { indigo: .78, purple: .55, midnight: .45 }, bottom: { indigo: .82, purple: .6, midnight: .5 }, side: {}, top: {} });
+  const edge = new Path2D(); rectZ(-14, -0.4, 14, 0.02, zE, edge); P.paint(edge, { indigo: .85, purple: .7, midnight: .5 });
+  const rail = new Path2D(); for (let x = -13; x <= 13; x += 1.6) rectZ(x - 0.03, 0, x + 0.03, 1.0, zE - 0.1, rail); rectZ(-14, 0.95, 14, 1.0, zE - 0.1, rail); rectZ(-14, 0.5, 14, 0.53, zE - 0.1, rail); P.paint(rail, { indigo: .8, purple: .65, midnight: .45 });
+  // columns, far to near
+  const swing = 0.34 * Math.sin(TAU * (t - T(57)) / (4 * BEAT)), bx = 0.3 + 1.0 * Math.sin(swing), by = 3.1 - 1.0 * Math.cos(swing) - 0.05, bz = 7.5;
+  const cols = []; for (let z = 25; z >= 5; z -= 5) for (const x of [-7, -3, 3, 7]) cols.push([x, z]);
+  for (const [x, z] of cols) {
+    const lit = clamp(1 - Math.hypot(x - bx, z - bz) / 9, 0, 1);
+    box(x - 0.3, x + 0.3, 0, Y1, z - 0.3, z + 0.3, { front: mix({ indigo: .85, purple: .62, midnight: .5 }, { indigo: .3, purple: .3, sunflower: .3, florange: .15 }, lit ** 1.5), side: mix({ indigo: .9, purple: .7, midnight: .55 }, { indigo: .4, purple: .35, sunflower: .25 }, lit ** 1.5 * (x > bx ? 0.3 : 1)), top: {} });
+  }
+  // plastic sheeting, billowing
+  const sheet = new Path2D(), top = [], bot = [];
+  for (let i = 0; i <= 14; i++) { const z = 8 + i / 14 * 8, b = 0.25 * Math.sin(t * 0.9 + i * 0.6) + 0.15 * Math.sin(t * 1.7 + i); top.push(pj(4.6, Y1 - 0.45, z)); bot.push(pj(4.6 + b, 0.35 + 0.25 * Math.sin(t * 1.3 + i * 0.9), z)); }
+  const pts = [...top, ...bot.reverse()].filter(Boolean); pline(pts, sheet); sheet.closePath();
+  P.light(sheet, 0.14); P.add(sheet, { pink: .22 }, 1);
+  // the chair left behind, with its shadow away from the bulb
+  const cx = -0.7, cz = 10.2, sh = new Path2D(); sh.ellipse(cx + (cx - bx) * 0.4, 0, 0.5, 0.12, 0, 0, TAU);
+  P.add(inPlane(cz, tr(CHAIR, 0, 0, 1, 0.001)), {}, 0);
+  const sp = poly([[cx - 0.3 + (cx - bx) * 0.3, 0.002, cz - 0.2], [cx + 0.3 + (cx - bx) * 0.9, 0.002, cz - 0.2], [cx + 0.4 + (cx - bx) * 1.1, 0.002, cz + 0.6], [cx - 0.4 + (cx - bx) * 0.4, 0.002, cz + 0.6]]);
+  P.add(sp, { indigo: .6, purple: .4 }, 0.6);
+  P.paint(inPlane(cz, tr(CHAIR, cx, 0, 1.05)), { indigo: .85, purple: .65, midnight: .35 });
+  // bulb: wire, glow, pool; flickers in bar 60 before the power goes
+  const flick = t > T(60) && rngFor('bulb' + Math.floor(t * 18))() < 0.35 ? 0.2 : 1, lvl = (0.85 + 0.15 * kick) * flick;
+  const w0 = pj(0.3, Y1, bz), b = pj(bx, by, bz), fl = pj(bx, 0, bz);
+  if (w0 && b) P.line(pline([w0, b]), { indigo: .9, purple: .7 }, 1.6);
+  if (fl) { glowE(fl[0], fl[1], 3.4 * scz(bz), 1.0 * scz(bz), 0.75 * lvl, 1); glowE(fl[0], fl[1], 3.8 * scz(bz), 1.2 * scz(bz), C.gold, 0.55 * lvl, 'add'); }
+  if (b) { glowE(b[0], b[1], 2.8 * scz(bz), 2.8 * scz(bz), 0.6, 0.55 * lvl, 'light', 0, 0.2); glowE(b[0], b[1], 1.4 * scz(bz), 1.4 * scz(bz), C.gold, 0.5 * lvl, 'add'); P.paint(circ(b[0], b[1], 0.05 * scz(bz)), mix(PAPERW, C.sun, 1 - lvl)); }
+  const dust = new Path2D(), dr = rngFor('dust');
+  for (let i = 0; i < 70; i++) { const x = bx + (dr() - 0.5) * 3, y = 0.3 + dr() * 2.6, z = bz + (dr() - 0.5) * 3 + 0.2 * Math.sin(t * 0.3 + i), d = Math.hypot(x - bx, y - by, z - bz); if (d > 1.8) continue; const c = pj(x + 0.1 * Math.sin(t * 0.2 + i), y + 0.05 * Math.sin(t * 0.4 + i * 2), z); if (c) circ(c[0], c[1], Math.max(0.9, 0.008 * scz(z)), dust); }
+  P.paint(dust, PAPERW, 0.7 * lvl);
+  st.spill = { col: C.gold, a: 0.18 * lvl };
+}
+
+/* ── roof ──────────────────────────────────────────────────────────────────────
+   The tallest tower: a dusk sky from indigo through pink to fluo orange, a striped sun sitting on the
+   horizon, a skyline of three hazes, a neon grid on the roof deck, a parapet with an aqua strip, a water
+   tank and an antenna mast. Kick: the sun's stripes open, a pulse runs out along the grid, windows jump.
+   Hats: stars and window sparkle. Claps: searchlights flick; bars 89–96 add fireworks and strobes.     */
+const SKYG = [[0, C.night], [0.3, { indigo: .6, purple: .75, pink: .15 }], [0.55, { purple: .45, pink: .7, indigo: .12 }], [0.8, { pink: .8, florange: .55 }], [1, { florange: .75, sunflower: .7, pink: .25 }]];
+const SKYLINE = (() => {
+  const r = rngFor('skyline'), layers = [];
+  const specs = [{ n: 40, hmin: 0.015, hmax: 0.11, wmin: 0.025, wmax: 0.07, win: 0 }, { n: 26, hmin: 0.05, hmax: 0.27, wmin: 0.035, wmax: 0.085, win: 1 }, { n: 8, hmin: 0.22, hmax: 0.58, wmin: 0.05, wmax: 0.09, win: 2 }];
+  specs.forEach((sp, li) => {
+    const tw = [];
+    for (let i = 0; i < sp.n; i++) {
+      let x = -1 + 2 * (i + r() * 0.8) / sp.n; if (li === 2) x = (i < 4 ? -1 : 1) * (0.34 + 0.13 * (i % 4) + r() * 0.06);
+      const h = sp.hmin + (sp.hmax - sp.hmin) * r() ** (li === 2 ? 0.7 : 1.3), w = sp.wmin + (sp.wmax - sp.wmin) * r();
+      const tiers = [{ w, h }]; if (r() < 0.55) tiers.push({ w: w * (0.55 + r() * 0.25), h: h * (1.08 + r() * 0.12) }); if (r() < 0.35) tiers.push({ w: w * 0.3, h: tiers[tiers.length - 1].h * (1.06 + r() * 0.08) });
+      tw.push({ x, tiers, spire: r() < (li === 2 ? 0.8 : 0.25) ? h * (0.12 + r() * 0.25) : 0, crown: r() < 0.3, ph: r() * TAU, rate: 0.6 + r() * 0.8, col: ['sun', 'aqua', 'pink'][Math.floor(r() * 3)], seed: r() });
+    }
+    layers.push(tw);
+  });
+  return layers;
+})();
+function roof(st) {
+  const t = st.t, F = CAM.F, hz = CAM.cy + CAM.oy + (CAM.y - 0) * 0, X = a => CAM.cx + CAM.ox + a * F - CAM.x * 0;
+  const horizon = CAM.cy + CAM.oy;
+  const drop = t >= T(73), big = t >= T(89) && t < T(97), outro = t >= T(97);
+  const sunY = horizon - F * (0.12 - 0.2 * easeInQuad(phase(t, T(93), DUR - T(93)))), sunR = F * 0.37;
+  // sky: a vertical ramp from the top of frame to the horizon
+  const skyGrad = lgrad(0, horizon - 1.25 * F, 0, horizon + 4, SKYG.map(([u, c]) => [u, c, 1]));
+  P.paintG(FULL, skyGrad);
+  // stars
+  const stars = new Path2D(), sr = rngFor('stars');
+  for (let i = 0; i < 260; i++) { const a = sr() * 2 - 1, e = sr() * 0.9 + 0.35, x = X(a * 0.9), y = horizon - e * F, tw = 0.5 + 0.5 * Math.sin(t * (1 + sr() * 3) + sr() * 9), rr = (0.8 + 1.6 * sr() * tw) * (1 + 1.5 * st.hat * (i % 7 === 0)); if (y < horizon - 0.55 * F) circ(x, y, rr, stars); }
+  P.paint(stars, PAPERW, 0.9);
+  // sun: a hot core fading to pink, horizontal cuts in its lower half that open on the kick and drift down
+  const sun = circ(X(0), sunY, sunR);
+  P.lightG(FULL, rgrad(X(0), sunY, sunR * 3.2, [[0, 0.6], [0.35, 0.3], [1, 0]]), { indigo: 1, purple: 1, midnight: 1, blue: 1 });
+  P.addG(FULL, rgrad(X(0), sunY, sunR * 2.6, [[0, 0.5], [0.45, 0.2], [1, 0]]), { florange: .8, pink: .5 });
+  P.paintG(sun, lgrad(0, sunY - sunR, 0, sunY + sunR, [[0, { sunflower: .55 }, 1], [0.35, { sunflower: 1, florange: .2 }, 1], [0.62, { sunflower: .8, florange: .9 }, 1], [1, { pink: 1, florange: .7 }, 1]]));
+  const cuts = new Path2D(), drift = (t * 0.35) % 1, open = 1 + 0.9 * st.kick * (drop ? 1 : 0);
+  for (let i = -1; i < 9; i++) { const v = (i + drift) / 8, y = sunY + sunR * (0.02 + 0.98 * v), hh = sunR * (0.012 + 0.07 * v) * open; if (v > 0) cuts.rect(X(0) - sunR - 2, y, 2 * sunR + 4, hh); }
+  P.save(); P.clip(sun); P.paintG(cuts, skyGrad); P.restore();
+  // long thin clouds across the lower sun, lit from below
+  const cl = rngFor('clouds');
+  for (let i = 0; i < 5; i++) {
+    const y = horizon - F * (0.05 + 0.2 * cl()), x = X(-1.2 + 2.4 * ((cl() + t * 0.004 * (1 + cl())) % 1)), w = F * (0.4 + 0.5 * cl()), h = F * (0.008 + 0.01 * cl());
+    const c = new Path2D(); c.roundRect(x - w / 2, y - h / 2, w, h, h / 2);
+    P.paint(c, { purple: .75, indigo: .35, pink: .3 }); const lip = new Path2D(); lip.roundRect(x - w / 2 + h, y + h * 0.15, w - 2 * h, h * 0.35, h * 0.2); P.paint(lip, { florange: .9, sunflower: .5 });
+  }
+  // horizon haze
+  P.addG(FULL, lgrad(0, horizon - 0.18 * F, 0, horizon + 0.05 * F, [[0, 0], [0.8, 0.5], [1, 0.3]]), { florange: .6, pink: .4 });
+  // skyline: far haze, mid towers with equalizer windows, near supertalls
+  const lcol = [{ purple: .55, pink: .45, indigo: .08 }, { purple: .72, indigo: .52, pink: .18 }, { indigo: .82, purple: .7, midnight: .28, blue: .15 }];
+  SKYLINE.forEach((layer, li) => {
+    const body = new Path2D(), wins = { sun: new Path2D(), aqua: new Path2D(), pink: new Path2D() }, tips = new Path2D(), rims = new Path2D();
+    for (const tw of layer) {
+      let top = 0;
+      tw.tiers.forEach(tr => { const x0 = X(tw.x - tr.w / 2), x1 = X(tw.x + tr.w / 2), y0 = horizon - tr.h * F; body.rect(x0, y0, x1 - x0, horizon + 0.12 * F - y0); top = Math.max(top, tr.h); if (li > 0) rims.rect(x1 - Math.max(1.5, 0.004 * F), y0, Math.max(1.5, 0.004 * F), horizon - y0); });
+      if (tw.crown) { const tr = tw.tiers[tw.tiers.length - 1], x0 = X(tw.x - tr.w / 2), x1 = X(tw.x + tr.w / 2), y0 = horizon - tr.h * F; body.moveTo(x0, y0); body.lineTo((x0 + x1) / 2, y0 - tr.w * F * 0.45); body.lineTo(x1, y0); body.closePath(); }
+      if (tw.spire) { const xs = X(tw.x), y0 = horizon - top * F; body.rect(xs - 1.2, y0 - tw.spire * F, 2.4, tw.spire * F); if (li === 2 && Math.floor(t / BAR * 2 + tw.seed * 4) % 2 === 0) circ(xs, y0 - tw.spire * F, 4, tips); }
+      if (tw.win) {
+        const tr = tw.tiers[0], cols = Math.max(2, Math.floor(tr.w * F / 11)), rows = Math.floor(tr.h * F / 14), cw = tr.w * F / cols, rh = 14;
+        const lvl = drop ? clamp(0.25 + 0.5 * st.bass * (0.6 + 0.4 * Math.sin(t * tw.rate + tw.ph)) + 0.35 * st.kick * (0.5 + tw.seed), 0, 1) : 0.2 + 0.15 * Math.sin(t * 0.3 + tw.ph);
+        const strobe = big && st.clap > 0.5;
+        for (let c = 0; c < cols; c++) {
+          const colLvl = clamp(lvl * (0.7 + 0.6 * Math.sin(c * 1.7 + tw.ph + t * 2 * tw.rate)), 0, 1), lit = strobe ? rows : Math.floor(colLvl * rows);
+          for (let rr = 0; rr < lit; rr++) { const wx = X(tw.x - tr.w / 2) + c * cw + cw * 0.25, wy = horizon - (rr + 1) * rh + 3; if (wy < horizon - tr.h * F + 4) continue; wins[tw.col].rect(wx, wy, cw * 0.5, rh * 0.45); }
+        }
+      }
+    }
+    P.paint(body, lcol[li]);
+    if (li > 0) P.paint(rims, { florange: .8, pink: .4 }, 0.9);
+    for (const k in wins) P.paint(wins[k], k === 'sun' ? C.gold : k === 'aqua' ? C.aqua : C.pink, li === 1 ? 0.9 : 1);
+    P.paint(tips, C.pink);
+    if (li === 0) P.addG(FULL, lgrad(0, horizon - 0.2 * F, 0, horizon, [[0, 0], [1, 0.45]]), { pink: .5, florange: .4 });
+  });
+  cityCarpet(st, horizon);
+  // searchlights from behind the parapet
+  if (drop) for (let i = 0; i < 3; i++) {
+    const base = X(-0.6 + 0.6 * i), ang = -Math.PI / 2 + 0.55 * Math.sin(t * (0.21 + 0.07 * i) + i * 2) + (st.clap > 0.6 && big ? 0.1 * Math.sin(i + t * 20) : 0), L = 1.6 * H;
+    const bx = base + Math.cos(ang) * L, by = horizon + Math.sin(ang) * L, wv = 0.035 * L;
+    const beam = new Path2D(); beam.moveTo(base - 3, horizon + 10); beam.lineTo(bx - wv * Math.sin(ang), by + wv * Math.cos(ang)); beam.lineTo(bx + wv * Math.sin(ang), by - wv * Math.cos(ang)); beam.lineTo(base + 3, horizon + 10); beam.closePath();
+    P.lightG(beam, lgrad(base, horizon, bx, by, [[0, 0.5], [1, 0]]), 1);
+    P.addG(beam, lgrad(base, horizon, bx, by, [[0, 0.35], [1, 0]]), i === 1 ? C.ice : { aqua: .3, sunflower: .3 });
+  }
+  // fireworks (bars 89–96, on the claps)
+  if (big) fireworks(st, X, horizon);
+  // roof deck with a neon grid; the pulse runs out along it on the kick
+  const z0 = CD + REV, zP = 16, xE = 9;
+  P.paint(rectY(-xE, z0, xE, zP, 0), { indigo: .82, purple: .62, midnight: .35 });
+  const sp = pj(0, 0, zP), sN = pj(0, 0, Math.max(z0, CAM.z + 0.3));
+  if (sp && sN) { const refl = rectY(-0.9, z0, 0.9, zP, 0.001); P.lightG(refl, lgrad(0, sp[1], 0, sN[1], [[0, 0.45], [0.5, 0.12], [1, 0]]), 1); P.addG(refl, lgrad(0, sp[1], 0, sN[1], [[0, 0.5], [0.6, 0.12], [1, 0]]), { florange: .6, sunflower: .5 }); }   // the sun's reflection
+  const grid = new Path2D(), glow = new Path2D(), kz = st.k && drop ? z0 + (st.t + LEAD - st.k.t) * 26 : -99;
+  const hot = new Path2D();
+  for (let x = -xE; x <= xE; x += 1) { poly([[x - 0.02, 0.002, z0], [x + 0.02, 0.002, z0], [x + 0.02, 0.002, zP], [x - 0.02, 0.002, zP]], grid); poly([[x - 0.09, 0.002, z0], [x + 0.09, 0.002, z0], [x + 0.09, 0.002, zP], [x - 0.09, 0.002, zP]], glow); }
+  for (let z = Math.ceil(z0); z <= zP; z += 1) { const p = Math.abs(z - kz) < 1.2 ? hot : grid; poly([[-xE, 0.002, z - 0.025], [xE, 0.002, z - 0.025], [xE, 0.002, z + 0.025], [-xE, 0.002, z + 0.025]], p); poly([[-xE, 0.002, z - 0.1], [xE, 0.002, z - 0.1], [xE, 0.002, z + 0.1], [-xE, 0.002, z + 0.1]], glow); }
+  P.add(glow, { pink: .7 }, 0.45 + 0.3 * st.kick * (drop ? 1 : 0));
+  P.paint(grid, C.pink);
+  P.paint(hot, { pink: .4, sunflower: .5 });
+  // parapets with aqua strips, props
+  P.paint(rectX(z0, 0, zP, 1.1, -xE), { indigo: .85, purple: .7, midnight: .35 }); P.paint(rectX(z0, 0, zP, 1.1, xE), { indigo: .85, purple: .7, midnight: .35 });
+  P.paint(rectZ(-xE - 1, 0, xE + 1, 1.1, zP), { indigo: .88, purple: .72, midnight: .42 });
+  const strip = new Path2D(); rectZ(-xE, 1.06, xE, 1.1, zP - 0.01, strip); rectX(z0, 1.06, zP, 1.1, -xE + 0.01, strip); rectX(z0, 1.06, zP, 1.1, xE - 0.01, strip);
+  const sgl = new Path2D(); rectZ(-xE, 0.95, xE, 1.25, zP - 0.02, sgl);
+  P.add(sgl, C.aqua, 0.35); P.paint(strip, C.aqua);
+  roofProps(st, horizon, drop);
+}
+function roofProps(st, horizon, drop) {
+  const t = st.t, dark = { indigo: .9, purple: .78, midnight: .45 }, rim = { florange: .9, pink: .5 };
+  // water tank on legs (left)
+  const tx = -4.3, tz = 11.6, tank = new Path2D(), legs = new Path2D(), rims = new Path2D();
+  for (const lx of [-0.9, -0.3, 0.3, 0.9]) rectZ(tx + lx - 0.05, 0, tx + lx + 0.05, 2.6, tz, legs);
+  const brace = new Path2D(); brace.moveTo(tx - 0.9, 0.4); brace.lineTo(tx + 0.9, 2.2); brace.moveTo(tx + 0.9, 0.4); brace.lineTo(tx - 0.9, 2.2);
+  P.line(inPlane(tz, brace), dark, Math.max(1, 0.035 * scz(tz)));
+  rectZ(tx - 1.2, 2.6, tx + 1.2, 5.2, tz, tank);
+  const cone = new Path2D(); cone.moveTo(tx - 1.3, 5.2); cone.lineTo(tx, 6.3); cone.lineTo(tx + 1.3, 5.2); cone.closePath(); inPlane(tz, cone, tank);
+  P.paint(legs, dark); P.paint(tank, dark);
+  const hoops = new Path2D(); for (const y of [3.0, 3.8, 4.6]) rectZ(tx - 1.2, y, tx + 1.2, y + 0.06, tz - 0.01, hoops); P.paint(hoops, { indigo: .95, purple: .85, midnight: .6 });
+  rectZ(tx + 1.05, 2.6, tx + 1.2, 5.2, tz - 0.02, rims); P.paint(rims, rim, 0.9);
+  // antenna mast with guy wires and a pink beacon on every bar
+  const mx = 4.1, mz = 12.8, mast = new Path2D(), top = 11;
+  rectZ(mx - 0.08, 0, mx + 0.08, top, mz, mast);
+  const lat = new Path2D(); for (let y = 0.5; y < top; y += 0.9) { lat.moveTo(mx - 0.25 * (1 - y / top) - 0.1, y); lat.lineTo(mx + 0.25 * (1 - y / top) + 0.1, y + 0.45); }
+  lat.moveTo(mx, top); lat.lineTo(mx - 3, 0); lat.moveTo(mx, top * 0.7); lat.lineTo(mx + 2.6, 0);
+  P.paint(mast, dark); P.line(inPlane(mz, lat), dark, Math.max(0.8, 0.02 * scz(mz)));
+  const b = pj(mx, top + 0.1, mz), beat = st.k && st.k.down && st.k.age < 0.3 ? 1 - st.k.age / 0.3 : 0.15;
+  if (b) { glowE(b[0], b[1], 40 * beat + 6, 40 * beat + 6, { pink: 1 }, 0.9 * beat, 'add'); P.paint(circ(b[0], b[1], 4), beat > 0.2 ? PAPERW : C.pink); }
+  // AC units
+  const ac = new Path2D(); for (const [x, z] of [[2.5, 8.8], [3.6, 9.6], [-2.6, 13.4]]) { rectZ(x - 0.5, 0, x + 0.5, 0.8, z, ac); rectY(x - 0.5, z, x + 0.5, z + 0.7, 0.8, ac); }
+  P.paint(ac, { indigo: .78, purple: .7, midnight: .3 });
+}
+function cityCarpet(st, horizon) {
+  if (CAM.y < 2.3) return;
+  const G = -430, z0 = 260, z1 = 9000, t = st.t;
+  P.paintG(poly([[-9000, G, z0], [9000, G, z0], [9000, G, z1], [-9000, G, z1]]), lgrad(0, horizon, 0, horizon + 0.85 * CAM.F, [[0, { pink: .6, purple: .45, florange: .25 }, 1], [0.25, { purple: .7, indigo: .5, pink: .25 }, 1], [1, { indigo: .9, purple: .72, midnight: .35 }, 1]]));
+  const av = new Path2D(), sts = new Path2D(), glow = new Path2D(), blocks = new Path2D(), cars = new Path2D();
+  for (let x = -6300; x <= 6300; x += 300) { const big = Math.round(x / 300) % 4 === 0; poly([[x - 5, G, z0], [x + 5, G, z0], [x + 5, G, z1], [x - 5, G, z1]], big ? av : sts); poly([[x - 30, G, z0], [x + 30, G, z0], [x + 30, G, z1], [x - 30, G, z1]], glow); }
+  for (let z = z0; z < z1; z *= 1.2) { poly([[-9000, G, z - 3], [9000, G, z - 3], [9000, G, z + 3], [-9000, G, z + 3]], sts); poly([[-9000, G, z - 18], [9000, G, z - 18], [9000, G, z + 18], [-9000, G, z + 18]], glow); }
+  const br = rngFor('blocks');
+  for (let i = 0; i < 160; i++) { const x = (br() * 2 - 1) * 4000, z = z0 * 1.4 + br() ** 2 * 5000, w = 40 + br() * 90; poly([[x - w, G + 1, z], [x + w, G + 1, z], [x + w, G + 1, z + w * 1.4], [x - w, G + 1, z + w * 1.4]], blocks); }
+  for (let i = 0; i < 60; i++) { const x = (Math.round((i * 7) % 43) - 21) * 300, z = z0 + ((t * (60 + (i % 5) * 25) + i * 777) % (4000)), c = pj(x + 8 * (i % 2 ? 1 : -1), G + 1, z); if (c) circ(c[0], c[1], Math.max(0.9, 3000 / z), cars); }
+  P.paint(blocks, { indigo: .6, purple: .55, pink: .25 });
+  const lamps = new Path2D(), lr = rngFor('lamps');
+  for (let i = 0; i < 1400; i++) { const x = (Math.round(lr() * 40) - 20) * 300 + (lr() < 0.5 ? 8 : -8), z = z0 * 1.2 + lr() ** 1.6 * 6000, c = pj(x, G + 1, z); if (c) circ(c[0], c[1], Math.max(0.8, 1600 / z), lamps); }
+  for (let i = 0; i < 900; i++) { const x = (lr() * 2 - 1) * 5000, z0b = z0; let z = z0b * 1.2; const k = Math.floor(lr() * 18); for (let j = 0; j < k; j++) z *= 1.2; const c = pj(x, G + 1, z); if (c) circ(c[0], c[1], Math.max(0.8, 1500 / z), lamps); }
+  P.add(glow, { florange: .7, sunflower: .45 }, 0.4);
+  P.paint(lamps, mix(C.gold, PAPERW, 0.35));
+  P.paint(sts, mix(C.gold, PAPERW, 0.15), 0.85); P.paint(av, C.pink);
+  P.paint(cars, PAPERW);
+  const hz = lgrad(0, horizon - 4, 0, horizon + 0.3 * CAM.F, [[0, 0.75], [1, 0]]);
+  P.addG(poly([[-9000, G, z0], [9000, G, z0], [9000, G, z1], [-9000, G, z1]]), hz, { pink: .6, florange: .35 });
+}
+function fireworks(st, X, horizon) {
+  const t = st.t, F = CAM.F;
+  for (let r = lastOf(CLAPS, t + LEAD + 0.45), n = 0; r >= 0 && n < 5; r--, n++) {
+    const c = CLAPS[r], age = t + LEAD - c.t; if (age > 2.0 || c.t < T(89) || c.t > T(97)) continue;
+    const g = rngFor('fw' + c.i), ax = -0.6 + 1.2 * g(), x0 = X(ax), y0 = horizon - F * (0.5 + 0.4 * g()), col = [C.pink, C.gold, C.aqua, C.hot, C.pink][Math.floor(g() * 5)];
+    if (age < 0) {                                         // launch: a spark climbing with a fading tail
+      const u = 1 + age / 0.45, yb = horizon + 10, y = lerp(yb, y0, easeOutQuad(u)), tail = pline([[x0 + 4 * Math.sin(u * 9), Math.min(yb, y + 120)], [x0, y]]);
+      P.line(tail, mix(col, PAPERW, 0.5), 2.2, 0.7); P.paint(circ(x0, y, 3.5), PAPERW); continue;
+    }
+    const dots = new Path2D(), trails = new Path2D(), R = F * (0.3 + 0.18 * g()) * easeOutCubic(clamp(age / 0.8, 0, 1)), fall = 110 * age * age, fade = clamp(1 - age / 2.0, 0, 1);
+    for (let i = 0; i < 200; i++) {
+      const a = i / 200 * TAU * 3 + g() * 0.3, rr = R * (0.35 + 0.65 * Math.sqrt(g())), x = x0 + Math.cos(a) * rr, y = y0 + Math.sin(a) * rr + fall;
+      if (fade > 0.25 || g() < fade * 3) circ(x, y, (3 + 2.4 * g()) * fade + 0.8, dots);
+      trails.moveTo(x, y); trails.lineTo(x0 + Math.cos(a) * rr * 0.6, y0 + Math.sin(a) * rr * 0.6 + fall * 0.7);
+    }
+    glowE(x0, y0 + fall, R * 1.5 + 10, R * 1.5 + 10, 0.7, 0.45 * fade);
+    glowE(x0, y0 + fall, R * 1.3 + 10, R * 1.3 + 10, col, 0.5 * fade, 'add');
+    P.line(trails, col, 1.8, fade * 0.8); P.paint(dots, mix(col, PAPERW, 0.25 * (1 - age)), 1);
+    if (age < 0.14) P.paint(circ(x0, y0, 30 * (1 - age / 0.14)), PAPERW);
+  }
+}
+
+/* ── shaft (looking up from the cabin roof) ───────────────────────────────── */
+function shaftView(st) {
+  const t = st.t, build = st.id === 'shaftBuild', v = build ? st.speed : st.speed + 0.4, fpos = st.fpos, FH = 3.5, SW = 1.25, SH = 1.1;
+  const rush = build ? phase(t, T(69), TB(72, 2) - T(69)) : 0;
+  setCam({ x: 0, y: 0, z: 0, F: 1350 * (1 + 0.04 * st.kick) * (1 - 0.45 * rush ** 1.5), roll: 0.1 * Math.sin(t * 0.25) + (build ? 1.6 * rush ** 2.4 : 0) });
+  const RINGS = [C.pink, C.aqua, C.gold].map(col => ({ col, core: new Path2D(), halo: new Path2D() }));
+  const zMax = 80, pw = build ? smooth(phase(t, T(69), 0.6 * BEAT)) * (t < TB(69, 1) && rngFor('pw' + Math.floor(t * 24))() < 0.5 ? 0.25 : 1) : 1;
+  const wall = { indigo: .92, purple: .72, midnight: .55, blue: .3 }, sideW = { indigo: .88, purple: .76, midnight: .48, blue: .25 };
+  P.paint(FULL, { purple: .55, pink: .35, indigo: .35 });
+  const walls = [[[-SW, -SH], [SW, -SH], wall], [[SW, -SH], [SW, SH], sideW], [[SW, SH], [-SW, SH], wall], [[-SW, SH], [-SW, -SH], sideW]];
+  for (const [a, b, c] of walls) P.paint(poly([[a[0], a[1], 0.05], [b[0], b[1], 0.05], [b[0], b[1], zMax], [a[0], a[1], zMax]]), c);
+  const seams = new Path2D();
+  for (const [x, y, ax] of [[-0.6, SH, 0], [0.6, SH, 0], [-0.6, -SH, 0], [0.6, -SH, 0], [SW, -0.2, 1], [-SW, 0.2, 1], [SW, 0.8, 1], [-SW, -0.8, 1]]) poly(ax ? [[x, y - 0.012, 0.1], [x, y + 0.012, 0.1], [x, y + 0.012, zMax], [x, y - 0.012, zMax]] : [[x - 0.012, y, 0.1], [x + 0.012, y, 0.1], [x + 0.012, y, zMax], [x - 0.012, y, zMax]], seams);
+  P.paint(seams, { indigo: .95, purple: .8, midnight: .6 });
+  // the top of the shaft: faint in the first run, the sky opening on the rush
+  const vp = pj(0, 0, zMax), sky = build ? phase(t, T(70), 2.5 * BAR) : 0;
+  P.lightG(FULL, rgrad(vp[0], vp[1], 0.5 * H, [[0, 0.45 + 0.5 * sky], [0.35, 0.18 + 0.2 * sky], [1, 0]]), 1);
+  P.addG(FULL, rgrad(vp[0], vp[1], 0.42 * H, [[0, 0.35 + 0.5 * sky], [1, 0]]), { pink: .85, florange: .6 * sky, sunflower: .3 * sky });
+  // landings: slab rings, landing doors with light round them, blurred into streaks with the speed
+  const blur = clamp(v * 0.05, 0.02, FH * 1.2), slabs = new Path2D(), lips = new Path2D(), work = new Path2D(), workH = new Path2D(), doorsP = new Path2D(), lights = FLOOR_COLS.map(() => new Path2D()), halos = FLOOR_COLS.map(() => new Path2D());
+  for (let n = Math.floor(fpos) - 1; n < Math.floor(fpos) + 24; n++) {
+    const z = (n - fpos) * FH + 2.2; if (z < 0.1 || z > zMax) continue;
+    for (const [a, b] of [[[-SW, -SH], [SW, -SH]], [[-SW, SH], [SW, SH]], [[-SW, -SH], [-SW, SH]], [[SW, -SH], [SW, SH]]]) poly([[a[0], a[1], z], [b[0], b[1], z], [b[0], b[1], z + 0.3], [a[0], a[1], z + 0.3]], slabs);
+    const ring = RINGS[((n % 3) + 3) % 3];
+    for (const [a, b] of [[[-SW, -SH], [SW, -SH]], [[-SW, SH], [SW, SH]], [[-SW, -SH], [-SW, SH]], [[SW, -SH], [SW, SH]]]) { poly([[a[0], a[1], z], [b[0], b[1], z], [b[0], b[1], z + 0.05 + blur], [a[0], a[1], z + 0.05 + blur]], ring.core); poly([[a[0], a[1], z - 0.25], [b[0], b[1], z - 0.25], [b[0], b[1], z + 0.35 + blur], [a[0], a[1], z + 0.35 + blur]], ring.halo); }
+    poly([[-0.55, SH, z + 0.3], [0.55, SH, z + 0.3], [0.55, SH, z + 2.4], [-0.55, SH, z + 2.4]], doorsP);
+    for (const x of [-SW + 0.002, SW - 0.002]) { poly([[x, -0.07, z + 1.1], [x, 0.07, z + 1.1], [x, 0.07, z + 1.24 + blur], [x, -0.07, z + 1.24 + blur]], work); poly([[x, -0.4, z + 0.8], [x, 0.4, z + 0.8], [x, 0.4, z + 1.6 + blur], [x, -0.4, z + 1.6 + blur]], workH); }
+    const k = ((n % 5) + 5) % 5, L = lights[k], Hl = halos[k];
+    poly([[-0.55, SH - 0.001, z + 0.3], [0.55, SH - 0.001, z + 0.3], [0.55, SH - 0.001, z + 0.34 + blur], [-0.55, SH - 0.001, z + 0.34 + blur]], L);
+    poly([[-0.007, SH - 0.001, z + 0.3], [0.007, SH - 0.001, z + 0.3], [0.007, SH - 0.001, z + 2.4 + blur], [-0.007, SH - 0.001, z + 2.4 + blur]], L);
+    poly([[-0.9, SH - 0.002, z + 0.1], [0.9, SH - 0.002, z + 0.1], [0.9, SH - 0.002, z + 0.6 + blur], [-0.9, SH - 0.002, z + 0.6 + blur]], Hl);
+    if (n % 3 === 0) { poly([[SW - 0.001, -0.3, z + 1.4], [SW - 0.001, 0.3, z + 1.4], [SW - 0.001, 0.3, z + 1.52 + blur], [SW - 0.001, -0.3, z + 1.52 + blur]], L); poly([[SW - 0.002, -0.6, z + 1.2], [SW - 0.002, 0.6, z + 1.2], [SW - 0.002, 0.6, z + 1.8 + blur], [SW - 0.002, -0.6, z + 1.8 + blur]], Hl); }
+  }
+  P.paint(slabs, { indigo: .62, purple: .5, blue: .35 }); P.paint(doorsP, { blue: .55, purple: .5, indigo: .55 });
+  P.add(workH, C.gold, 0.45 * pw); P.paint(work, mix(C.sun, PAPERW, 0.5), pw);
+  halos.forEach((Hl, i) => P.add(Hl, FLOOR_COLS[i], 0.6 * pw));
+  for (const r of RINGS) { P.add(r.halo, r.col, 0.55 * pw); P.paint(r.core, mix(r.col, PAPERW, 0.3), pw); }
+  lights.forEach((L, i) => P.paint(L, mix(FLOOR_COLS[i], PAPERW, 0.45), pw));
+  const rails = new Path2D(); for (const y of [-0.5, 0.5]) for (const x of [-SW + 0.001, SW - 0.001]) poly([[x, y - 0.03, 0.1], [x, y + 0.03, 0.1], [x, y + 0.03, zMax], [x, y - 0.03, zMax]], rails);
+  P.paint(rails, { indigo: .95, purple: .8, midnight: .6 });
+  // counterweight rushing past on the far wall in the first run (it drops while we rise)
+  if (!build) {
+    const zc = lerp(78, -4, easeInQuad(phase(t, TB(31, 0), 1.2 * BAR)));
+    if (zc < 78 && zc > -3) {
+      const face = poly([[-0.6, -SH + 0.36, zc], [0.6, -SH + 0.36, zc], [0.6, -SH + 0.36, zc + 2.6], [-0.6, -SH + 0.36, zc + 2.6]]), front = poly([[-0.6, -SH, zc], [0.6, -SH, zc], [0.6, -SH + 0.36, zc], [-0.6, -SH + 0.36, zc]]);
+      P.paint(face, { indigo: .8, purple: .6, blue: .35 }); P.paint(front, { indigo: .7, purple: .5, blue: .3 });
+      const stripes = new Path2D(); for (let i = -6; i < 6; i++) poly([[i * 0.2, -SH + 0.36, zc + 0.02], [i * 0.2 + 0.1, -SH + 0.36, zc + 0.02], [i * 0.2 + 0.1 + 0.1, -SH + 0.36, zc + 0.3], [i * 0.2 + 0.1, -SH + 0.36, zc + 0.3]], stripes);
+      P.save(); P.clip(face); P.paint(stripes, C.orange); P.restore();
+    }
+  }
+  const cables = new Path2D(); for (const x of [-0.12, -0.04, 0.04, 0.12]) poly([[x - 0.006, 0.18, 0.12], [x + 0.006, 0.18, 0.12], [x + 0.006, 0.18, zMax], [x - 0.006, 0.18, zMax]], cables);
+  P.paint(cables, { indigo: .92, purple: .75, midnight: .6 });
+  // our own roof lamp lights the near walls at the frame edges
+  P.lightG(FULL, rgrad(vp[0], vp[1], 0.95 * H, [[0, 0], [0.55, 0.04], [1, 0.3]]), pw);
+  // speed lines on the rush
+  if (v > 4) {
+    const sl = new Path2D(), r = rngFor('speed' + Math.floor(t * 30)), k = clamp(v / 30, 0, 1);
+    for (let i = 0; i < 70 * k; i++) { const a = r() * TAU, r0 = 60 + r() * 260, r1 = r0 + 200 + r() * 900 * k; sl.moveTo(vp[0] + Math.cos(a) * r0, vp[1] + Math.sin(a) * r0); sl.lineTo(vp[0] + Math.cos(a) * r1, vp[1] + Math.sin(a) * r1); }
+    P.line(sl, PAPERW, 1.8, 0.55);
+  }
+  if (pw < 0.999) P.add(FULL, DARKEN, 0.85 * (1 - pw));
+}
+
+/* ── shots ─────────────────────────────────────────────────────────────────── */
+const SHOT_DRAW = { shaft: shaftView, shaftBuild: shaftView };
+function drawArt(t) {
+  const st = stateAt(t);
+  P.reset();
+  (SHOT_DRAW[st.id] || cabin)(st);
+  // drop flash
+  const da = t + LEAD - T(73);
+  if (da >= 0 && da < 1.2) { P.light(FULL, 1, Math.exp(-da * 4)); P.add(FULL, { pink: .6, sunflower: .3 }, 0.6 * Math.exp(-da * 6)); }
+  renderCoverage();
+  composite();
+  const k = st.k, inDrop = t >= T(73);
+  const every = k && (k.bar >= 81 && k.bar <= 96 ? 1 : 4), hard = k && k.bar >= 89 && k.bar <= 96;
+  const tear = inDrop && k && k.down && k.age < 0.13 && (k.bar - 1) % every === 0 ? (k.bar % 8 === 1 ? 0.8 : hard ? 0.5 : 0.3) : 0;
+  const flash = da >= 0 && da < 1.2 ? Math.exp(-da * 3.5) : 0;
+  vhs(t, {
+    chroma: 2.2 + (inDrop ? 4 : 1.4) * st.kick + 12 * flash + (st.id === 'shaftBuild' ? 5 * phase(t, T(69), 4 * BAR) ** 2 : 0),
+    track: clamp((st.id === 'shaftBuild' ? 0.3 + 0.6 * phase(t, T(69), 4 * BAR) : 0) + (st.id === 'outage' ? 0.25 : 0), 0, 1),
+    glitch: Math.max(tear, flash, st.id === 'fill' ? 0.35 * kickEnv(t, 0.08) : 0),
+    glitchKey: k ? k.i : 0,
+    noise: 0.05 + (st.id === 'outage' ? 0.05 : 0), scan: 0.1, bleed: 0.22, sat: 1.4, contrast: 1.15, lines: Math.round(6 * H / W),
+  });
+}
+const SHOTS = SHOTLIST.map(s => ({ id: s.id, start: s.t0, end: s.t1, readAt: (s.t0 + s.t1) / 2, action: s.id, transition: 'cut' }));
+// ART END
+
+/* ── runtime ─────────────────────────────────────────────────────────────── */
+const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+canvas.width = OUTW; canvas.height = OUTH;
+paperData = bakePaper();
+const scrub = document.getElementById('scrub'), clockLabel = document.getElementById('time');
+function render(t) {
+  t = clamp(t, 0, DUR);
+  drawArt(t);
+  ctx.putImageData(frameImg, 0, 0);
+  scrub.value = t; clockLabel.value = t.toFixed(2);
+}
+/* A frame slower than the frame interval cannot play live: Play renders every frame once into a WebP
+   cache ("Buffering n%") and plays it with the track. seek() and window.__riso stay live and pure.  */
+const FPS = 30, NF = Math.round(DUR * FPS), cache = [], bitmaps = new Map(), playBtn = document.getElementById('play');
+const audio = document.getElementById('track');
+let at = 0, playing = false, epoch = 0, recorder = null, recordURL = null, slow = null, buffering = false, filled = 0;
+function label() { playBtn.textContent = playing ? 'Pause' : buffering ? 'Buffering ' + Math.round(filled / (NF + 1) * 100) + '%' : 'Play'; }
+function start() { if (at >= DUR) at = 0; epoch = performance.now() - at * 1000; playing = true; label(); if (audio) { audio.currentTime = at; audio.play().catch(() => {}); } }
+function pause() { if (playing) at = clamp(audio && !audio.paused ? audio.currentTime : (performance.now() - epoch) / 1000, 0, DUR); if (audio) audio.pause(); playing = false; buffering = false; label(); if (recorder?.state === 'recording') recorder.stop(); }
+async function buffer() {
+  buffering = true; label(); const resume = at;
+  for (let i = 0; i <= NF && buffering; i++) { if (cache[i]) continue; render(i / FPS); canvas.toBlob(b => { cache[i] = b; filled++; }, 'image/webp', 0.8); label(); await new Promise(r => setTimeout(r, 0)); }
+  while (buffering && filled < NF + 1) await new Promise(r => setTimeout(r, 50));
+  if (buffering) { buffering = false; at = resume; start(); }
+}
+function play() { if (at >= DUR) at = 0; if (slow === null) { const t0 = performance.now(); render(at); render(at); slow = (performance.now() - t0) / 2 > 900 / FPS; } if (!slow || filled >= NF + 1) start(); else buffer(); }
+function seek(t) { pause(); at = clamp(t, 0, DUR); render(at); }
+playBtn.onclick = () => playing || buffering ? pause() : play();
+document.getElementById('replay').onclick = () => { seek(0); play(); };
+scrub.oninput = () => seek(Number(scrub.value));
+addEventListener('keydown', e => { if (e.target.matches('input')) return; if (['Space', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault(); if (e.code === 'Space') playing || buffering ? pause() : play(); if (e.code === 'ArrowLeft') seek(at - 1 / FPS); if (e.code === 'ArrowRight') seek(at + 1 / FPS); });
+document.getElementById('record').onclick = () => {
+  if (recorder?.state === 'recording') { pause(); return; }
+  const mime = ['video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m));
+  if (!mime) throw Error('No supported recording codec; use probe.mjs');
+  seek(0); const stream = canvas.captureStream(FPS), chunks = []; recorder = new MediaRecorder(stream, { mimeType: mime });
+  recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = () => { stream.getTracks().forEach(t => t.stop()); if (recordURL) URL.revokeObjectURL(recordURL); recordURL = URL.createObjectURL(new Blob(chunks, { type: mime })); const a = document.getElementById('download'); a.href = recordURL; a.download = 'lift.webm'; a.style.display = 'inline'; };
+  recorder.start(); play();
+};
+function tick(now) {
+  if (playing) {
+    at = clamp(audio && !audio.paused ? audio.currentTime : (now - epoch) / 1000, 0, DUR);
+    if (!slow) render(at);
+    else {
+      const i = Math.min(NF, Math.floor(at * FPS));
+      for (let j = i; j < Math.min(NF + 1, i + 8); j++) if (cache[j] && !bitmaps.has(j)) { bitmaps.set(j, null); createImageBitmap(cache[j]).then(b => bitmaps.set(j, b)); }
+      for (const [j, b] of bitmaps) if (j < i - 1) { if (b) b.close(); bitmaps.delete(j); }
+      const b = bitmaps.get(i);
+      if (b) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(b, 0, 0); scrub.value = at; clockLabel.value = at.toFixed(2); }
+    }
+    if (at >= DUR) pause();
+  }
+  requestAnimationFrame(tick);
+}
+window.__riso = { duration: DUR, ready: false, seek, shots: SHOTS, audioFile: 'track.wav' };
+seek(Number(QS.get('t')) || 0);
+requestAnimationFrame(tick);
+window.__riso.ready = true;
+</script></html>

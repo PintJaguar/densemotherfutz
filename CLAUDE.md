@@ -70,6 +70,8 @@ Nach einer Re-Analyse ändern sich Hit-Indizes und damit Glitch-Seeds.
 | Pfad | Inhalt |
 |---|---|
 | `films/<name>/` | Eigene Musikvideos: `index.html`, `FILM.md`, `features.*`, `track.wav` |
+| `films/dense-motherfutz/` | Film 1 zum Track: U-Boot / Tiefsee-Abstieg (eigener Look, eigene Engine-Kopie) |
+| `films/lift-hochhaus/` | Film 2 zum selben Track, eigenständig: Aufzug durchs Hochhaus, Ink-Mix-Maler, 3D-Perspektive. Stand und nächste Schritte in `FILM.md` → „Übergabe“ |
 | `films/test-beat/` | Pipeline-Beweis auf dem synthetischen Test-Track (kein fertiger Film) |
 | `tools/analyze.mjs` | Track → Features (Bänder, Hits, BPM/Grid, Sektionen, Drops) |
 | `tools/lib/music-kit.js` | `M.*`-Zugriff, Synthwave-Inks, `vhs()`; wird in neue Filme kopiert |
