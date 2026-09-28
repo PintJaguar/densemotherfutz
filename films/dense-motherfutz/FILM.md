@@ -220,7 +220,54 @@ Ersetzt Blackout und Verscheuchen aus Runde 2 und den alten Drop/Schluss.
 - **Alter Fehler behoben:** `jellyRim` schaltete mitten im Band auf `source-over` und radierte das
   0,55-Pink der Glocke weg: Die Glocke war innen immer Papier. Jetzt ein Even-odd-Ring ohne Compositing.
 
-## Voll-Render (2026-09-26)
+Geprüft in Runde 3: `verify.mjs` grün; Kontaktbögen 3–190 s in 540. Probe
+`out/dense-motherfutz-probe-0-192-540.mp4`: 192,00 s, 540², 30 fps, AAC; 2211 s mit drei Prozessen. Helligkeit
+um den Drop 58–62 (kein Schwarz mehr), Inneres ab 181 s bei ~125. Nicht geprüft: Timing mit Ton, Bewegung
+nur auf Einzelbildern gesehen.
+
+## Runde 4 (2026-09-26): Look wie die Referenz, 9:16
+
+Referenz ist das ChatGPT-Triptychon (Konzept 5), Ziel: „flashiger, weniger kindlich, Farben poppen“.
+- **Format 9:16** (1080 × 1920), `?aspect=1:1` für das Quadrat. Layout in logischen px (`W`, `H`), Pixelarbeit
+  in `OUTW × OUTH`. Senkrechte Positionen skalieren mit `YS = H / W`. Stills und Video über `probe.mjs` (liest
+  die nativen Canvas-Pixel; `shoot.mjs`/`render.mjs` haben ein quadratisches Fenster und würden beschneiden).
+- **Verläufe statt Stufen:** `fastBandPass` nimmt neue Bandarten `{ lift }` (hellt um den Anteil auf) und
+  `{ over }` (dunkelt ohne Löschen). Die Füllfarbe darf ein Alpha-Verlauf sein. Wasser, Oberflächenlicht,
+  Lichtstrahlen, Lampenkegel und alle Glows sind jetzt gerasterte Verläufe. `JIT` ±34 statt ±4 macht Korn.
+- **Farben:** Flachwasser Aqua + Blau (oben hell, unten satt), Tiefe Blau + Indigo + Purple (Ultramarin/Violett),
+  Midnight fast ganz raus. VHS als „übersteuerte Überspielung“: `sat` 1,5, `contrast` 1,2, Scanlines 0,1.
+- **Konfetti-Korn:** ~7500 Punkte in Aqua, Pink, Sunflower, Papierweiß und Dunkel, an die Welt gebunden (drei
+  Parallaxen), funkeln, flackern mit den Hats.
+- **Kleines dunkles U-Boot:** Rumpf dunkel überdruckt, Aqua-Randlicht, Kuppelfenster, Florange-Streifen,
+  Lampe in der Nase mit weichem und hartem Kegel als Verlauf plus Florange-Glut an der Quelle.
+- **Sonar:** Pakete aus vier dünnen weißen Strichringen pro Ping.
+- **Fische:** 38 realistische Silhouetten (Rumpf, Gabelschwanz, Rücken- und Brustflosse) in verschiedenen
+  Tiefen, Takt 13–44, zucken auf der Kick. Die alten Ellipsen-Schwärme sind raus.
+- **Riff:** Äste, Seefächer und Hirnkorallen in vier Inks, Spitzen leuchten Sunflower.
+- **Qualle:** stärkeres Magenta (Glocke 0,72, Randschatten), Magenta-Bloom, Sunflower-Randlicht über Pink
+  (druckt orange), 20 lange Tentakel mit Florange-Glanzlinien.
+- **VHS:** dünne helle Dropout-Linien mit Chroma-Versatz quer durchs Bild, langsam wandernd.
+
+Geprüft in Runde 4:
+- `verify.mjs` grün nach dem 9:16-Umbau (nicht erneut nach den letzten Farbwerten).
+- Stills in 1080×1920 bei 3–187 s angesehen, nach jedem Farbschritt; an den Nutzer geschickt.
+- `out/dense-motherfutz-probe-0-30-180.mp4` (180×320, 45 s Renderzeit) und
+  `out/dense-motherfutz-probe-0-30-1080.mp4` (1080×1920, 30,00 s, 609 s mit drei Prozessen, ~2 s/Frame pro
+  Prozess, 242 MB bei 64 Mbit/s: das Korn frisst Bitrate).
+- `out/dense-motherfutz-probe-0-192-540.mp4`: 540×960, 192,00 s, AAC, 1758 s mit drei Prozessen, 474 MB.
+  Helligkeit alle 2 s: Intro ~114, Flachwasser bis 120, fällt stetig auf ~55 (Breakdown und Drop),
+  Inneres ~106. Keine Aussetzer.
+- Nicht geprüft: Bewegung und Timing mit Ton (ich kann das Video nicht abspielen).
+
+Bekannte Fehler / offen aus Runde 4:
+- **Drop-Blitz dunkelt statt aufzuhellen:** Auf dem Einschlag-Frame 133,00 s fällt die Helligkeit auf 44
+  (Umgebung 54). Der Pink-Flash druckt Pink über die dunkle Tiefe. Fix-Idee: zuerst Papier freilegen
+  (Lift über alle Platten), dann Pink darüber.
+- Qualle noch eher flach gezeichnet (Referenz: malerisch, fleckige Struktur); Manta und Anglerfisch
+  reine Silhouetten; das Innere am Schluss sehr grafisch.
+- Voll-Render 1080×1920 steht aus (geschätzt ~65 min mit drei Prozessen).
+
+## Voll-Render (2026-09-26, erste Fassung, 1:1; veraltet)
 
 `out/dense-motherfutz.mp4`: 192,00 s, 5760 Frames, 1080², H.264 + AAC. In sechs 32-s-Stücken
 gerendert, per ffmpeg verkettet und mit `track.wav` gemuxt. Sechs parallele Prozesse liefen auf
@@ -241,9 +288,8 @@ Stücken, nicht in einem Prozess.
 
 ## Schwächen / nächste Schritte
 
+(Stand erste Fassung; Halo, Glockeninnenseite und Schwärme sind in Runde 2–4 überarbeitet.)
 - Intro A steht 15 s fast still (nur Ringe, sinkende Sonne).
-- Halo um die Qualle sind harte konzentrische Scheiben; die Innenseite der Glocke ist flach.
-- Fischschwärme klein und selten; Groove 2 unterscheidet sich vor allem durch Farbe.
 - Kein Snare-Einsatz: der Detektor liefert keinen sauberen Backbeat (Treffer auf Achteln verteilt).
 
 ## Offen

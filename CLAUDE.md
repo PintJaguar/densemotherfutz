@@ -1,6 +1,6 @@
 # riso-music
 
-Privates, rein lokales Projekt (kein Azure DevOps, kein Remote). Musikvideos zu eigenen
+Privates Projekt (kein Azure DevOps), Remote: github.com/PintJaguar/densemotherfutz. Musikvideos zu eigenen
 elektronischen Tracks: das Bild reagiert auf Kick, Bass, Snare, Hats und Dramatik (Energie,
 Builds, Breakdowns, Drops). Die globale CHRIST-Stack-Vorgabe (C#/Angular) gilt hier nicht; diese
 Datei hat Vorrang.
@@ -61,7 +61,9 @@ Nach einer Re-Analyse ändern sich Hit-Indizes und damit Glitch-Seeds.
 - Szenen in Anzeigegröße backen; nie ein gerastertes Bitmap skalieren (Moiré).
 - Kein reines Schwarz: Tiefen sind Überdrucke; helle Motive (Sonne, Neonlinien) erst aus allen
   dunklen Platten knocken, dann drucken.
-- Eigene Tracks (`tracks/`, `films/*/track.wav`) sind git-ignoriert.
+- Quelltracks in `tracks/` sind git-ignoriert; `films/*/track.wav` liegt im Repo (render.mjs muxt es).
+- Nicht-quadratische Filme (dense-motherfutz ist 9:16): Stills und Renders über das `probe.mjs` im
+  Filmordner, weil `tools/lib/browser.mjs` ein quadratisches Fenster aufnimmt und beschneiden würde.
 
 ## Karte
 
