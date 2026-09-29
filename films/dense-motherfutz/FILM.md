@@ -193,7 +193,7 @@ Ersetzt Blackout und Verscheuchen aus Runde 2 und den alten Drop/Schluss.
   Band ein und fließt in den Schwarm, statt seitlich „anzukleben“.
 - **Einzelwesen beim Abtauchen:**
   - Manta, Takt 21–28: dunkle Silhouette im Flachwasser, Flügelschlag über zwei Takte, Bass vergrößert ihn.
-  - Anglerfisch, Takt 45–52: lauert von rechts, Maul auf und zu, Zähne auf Papier. Die Sunflower-Angel
+  - Anglerfisch, Takt 45–52 (seit Runde 6: Takt 29–45, siehe dort): lauert von rechts, Maul auf und zu, Zähne auf Papier. Die Sunflower-Angel
     pulsiert auf der Kick und flammt auf jedem Downbeat auf.
   - Staatsqualle (Siphonophore), Takt 55–62: Perlenkette in Aqua/Pink schlängelt quer durchs Bild, auf
     jedem Schlag läuft eine Lichtwelle vom Kopf die Kette hinunter.
@@ -292,6 +292,36 @@ Renders Runde 5:
   Frame 601 und 901 von Job 0 (vermutlich Rechner im Ruhezustand); die Datei ist trotzdem vollständig.
   Helligkeit jede Sekunde: gleichmäßig von 142 (Intro) über 150 (Flachwasser) auf ~75–84 (Breakdown und
   Drop), Sprünge nur 179–182 s (Flug ins Innere der Qualle, gewollt), Inneres ~111. Keine Aussetzer.
+
+## Runde 6 (2026-09-29): Anglerfisch früher, jagt das Boot auf einem Mitten-Stab
+
+Nutzer: Der Anglerfisch soll deutlich früher kommen, mit dem U-Boot interagieren und die lange ruhige
+Strecke davor aufbrechen; die Interaktion auf Peaks in den (eher mittleren) Frequenzen.
+
+**Gemessen** (STFT aus `track.wav`, Bänder 300–600 / 600–1200 / 1200–2400 / 2400–4800 und 350–1000 Hz,
+Pegel pro Sechzehntel auf dem Takt-Raster): Im Band 350–1000 Hz sitzt ein Stab auf **Schlag 2 jedes
+vierten Takts** (Takte 9, 13, 17, 21, … 41), ab Takt 43 jeden zweiten Takt. Abstand zum Mittel der
+anderen Schläge: Takt 29 +2,2 dB, 33 +6,4, 37 +6,2, 41 +5,2, 43 +2,4. Onset liegt 10–14 ms vor dem
+Rasterschlag, also auf dem Frame. `M.*` hat dafür kein eigenes Signal (`mid` ist 800–2500 Hz und von der
+Kick überdeckt), deshalb stehen die Zeiten wie die Kicks als Raster-Liste `ANG` in `index.html`.
+Nicht gegengehört: welches Instrument das ist.
+
+**Szene, Takt 29–45 (51,7–82,2 s)**, vorher Takt 45–52:
+| Stab | Zeit | Bild |
+|---|---|---|
+| Takt 29 | 52,21 | Angel zündet am rechten Rand; der Fisch schiebt sich auf der Kick heran (`pulseProg`), ins Lampenlicht |
+| Takt 33 | 59,59 | 1. Biss: Maul reißt über den Schlag davor auf, schnappt auf dem Stab zu; Boot weicht nach links oben aus, Lampe stottert 0,6 s |
+| Takt 37 | 66,98 | 2. Biss von rechts oben, streift das Boot: es wird nach unten gedrückt und trudelt, Lampe stottert 1 s |
+| Takt 41 | 74,36 | Boot dreht die Lampe über zwei Schläge auf den Fisch und blendet ihn: runder Licht-Ausbruch, Fisch als Silhouette, fliegt zurück, Angel erlischt |
+| Takt 43 | 78,05 | Angel flackert wieder an, letzter Schnapper ins Leere, dann sinkt er nach rechts unten weg (bis Takt 45) |
+
+Technik: Fisch 1,35× größer, mit Neigung (`rot`) und Schwanzschlag; Posen als Keyframe-Liste `AP`,
+Boot-Ausweichen in `subDodge()` (wirkt in `subAt`, also folgen Blasen und Lampe). Der Fisch druckt nach
+den Lampen-Bändern, bleibt also auch im Kegel Silhouette, und ist aus dem gelben Lampenkegel geknockt
+(Gelb über Blau druckte grün).
+
+Geprüft: `verify.mjs` grün; Stills 540 bei 52–81,5 s und um jeden Stab angesehen.
+Nicht geprüft: Timing mit Ton (ich kann das Video nicht abspielen).
 
 ## Voll-Render (2026-09-26, erste Fassung, 1:1; veraltet)
 

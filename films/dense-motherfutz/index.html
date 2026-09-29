@@ -1176,9 +1176,24 @@ function fishSil(g, x, y, L, dir, wag, key = 0) {        // side view: body, for
 
 /* Sub: floats at the surface, dives through intro B, holds frame centre, drifts in the drop and is
    held still once the jelly has it (bar 97). No kick wobble here: stateAt adds it.               */
+/* The mid stab that drives the anglerfish scene: 350–1000 Hz, beat 2 of every fourth bar, 5–6 dB over
+   the other beats in bars 33–41 (measured from track.wav, FILM.md). Grid times, like the kicks.
+   lure: the lure lights; s1, s2: strikes, the sub dodges; blind: the sub blinds it; last: a last snap. */
+const ANG = { lure: T(29) + BEAT, s1: T(33) + BEAT, s2: T(37) + BEAT, blind: T(41) + BEAT, last: T(43) + BEAT, S: 1.35, AIM: 0.45 };
+const hitOut = (t, t0, d) => easeOutCubic(phase(t + LEAD, t0, d));          // leaves on the frame of the stab
+const easeBack = (t, t0, d) => 1 - easeInOutCubic(phase(t, t0, d));
+function subDodge(t) {
+  const d1 = hitOut(t, ANG.s1, 0.2) * easeBack(t, ANG.s1 + 0.35, 1.5 * BAR);
+  const d2 = hitOut(t, ANG.s2, 0.2) * easeBack(t, ANG.s2 + 0.5, 2 * BAR);
+  const spin = hitOut(t, ANG.s2, 0.45) * easeBack(t, ANG.s2 + 0.45, 2 * BAR) * (1 + 0.25 * Math.sin(9 * (t - ANG.s2)) * Math.exp(-(t - ANG.s2)));
+  const aim = easeInOutCubic(phase(t, ANG.blind - 2 * BEAT, 2 * BEAT)) * easeBack(t, ANG.blind + BAR, 1.5 * BAR);
+  const kickBack = hitOut(t, ANG.blind, 0.25) * easeBack(t, ANG.blind + 0.3, BAR);
+  return { dx: -130 * d1 - 70 * d2 - 34 * kickBack, dy: -80 * d1 + 120 * d2 - 12 * kickBack, da: -0.45 * d1 + 1.1 * spin, aim };
+}
 function subAt(t) {
   const p = partAt(t), dive = p.id === 'introA' ? 0 : p.id === 'introB' ? easeInOutCubic(clamp(p.u * 1.25, 0, 1)) : 1;
   let x = lerp(440, 470, dive), y = lerp(SURF0 - 4, SUB_Y, dive), a = lerp(0.05, 1.05, dive);
+  if (t > ANG.lure && t < T(45)) { const d = subDodge(t); a = lerp(a, ANG.AIM, d.aim) + d.da; x += d.dx; y += d.dy; }
   const d = easeInOutCubic(phase(t, T(73), BAR));
   if (d > 0) {
     const tau = Math.min(t, T(97)) - T(73);
@@ -1356,10 +1371,10 @@ function specksPath(g, st, ink) {
 
 /* ── single creatures on the way down ──────────────────────────────────────────
    Manta (bars 21–28): a dark silhouette gliding through the shallows, wings on a two-bar stroke.
-   Anglerfish (bars 45–52): lurks in from the right; its lure pulses on the kick, flares on every
-   downbeat. Siphonophore (bars 55–62): a chain of beads snaking across, a light wave running down
-   it from the head on every beat. Comb jellies (bars 61–71): three ghosts with rainbow comb rows,
-   light running down the rows with the highs.                                                     */
+   Anglerfish (bars 29–45): breaks the calm of groove 1 and hunts the sub, cued by a mid stab
+   (350–1000 Hz) measured on beat 2 of bars 29, 33, 37, 41, 43 (FILM.md). Siphonophore (bars 55–62):
+   a chain of beads snaking across, a light wave running down it from the head on every beat. Comb
+   jellies (bars 61–71): three ghosts with rainbow comb rows, light running down with the highs.   */
 function mantaAt(t) {
   const u = phase(t, T(21), 8 * BAR); if (u <= 0 || u >= 1) return null;
   return { x: lerp(-360, W + 360, u), y: 0.24 * H + 80 * Math.sin(u * 3.1), rot: 0.1 * Math.sin(u * 6), flap: Math.sin((t - T(21)) / (2 * BAR) * TAU) * (0.7 + 0.3 * M.val('bass', t)), t };
@@ -1375,28 +1390,75 @@ function mantaShape(g, m) {
   g.lineWidth = 5; g.lineCap = 'round'; g.beginPath(); g.moveTo(-50, 0); g.quadraticCurveTo(-150, 14 * Math.sin(m.t * 2), -280, 24 * Math.sin(m.t * 2 + 1)); g.stroke();
   g.restore();
 }
+// Poses {x, y, rot}: the fish faces left, rot tilts the head down (+) or up (-). Mouth at local -120.
+const angBack = (p, d) => ({ x: p.x + d * Math.cos(p.rot), y: p.y + d * Math.sin(p.rot), rot: p.rot });
+const angBite = (mx, my, rot) => angBack({ x: mx, y: my, rot }, 120 * ANG.S);   // pose that puts the mouth on (mx, my)
+const SUBR = { x: 470, y: SUB_Y };
+const AP = (() => {
+  const L1 = { x: 845, y: 1010, rot: 0.42 }, L2 = { x: 900, y: 560, rot: -0.38 }, L3 = { x: 820, y: 930, rot: 0.3 }, L4 = { x: 870, y: 1150, rot: 0.15 };
+  const K1 = angBite(SUBR.x + 50, SUBR.y + 25, L1.rot), K2 = angBite(SUBR.x + 45, SUBR.y - 20, L2.rot);
+  const B3 = { ...angBack(angBack(L3, -40), 130), rot: 0.95 }, K4 = angBack(L4, -70);
+  const { lure, s1, s2, blind, last } = ANG;
+  // [t0, t1, from, to, ease, arc]: arc swings the path out to the right on the way round
+  return [
+    [T(29), lure, { x: W + 150, y: 1240, rot: 0.35 }, { x: W + 150, y: 1240, rot: 0.35 }],
+    [lure, T(32) + 2 * BEAT, { x: W + 150, y: 1240, rot: 0.35 }, L1, 'pulse'],
+    [s1 - BEAT, s1, L1, angBack(L1, 45), easeInQuad],
+    [s1, s1 + 0.13, angBack(L1, 45), K1, easeOutCubic],
+    [s1 + 0.5, s2 - BEAT, K1, L2, easeInOutCubic, 170],
+    [s2 - BEAT, s2, L2, angBack(L2, 45), easeInQuad],
+    [s2, s2 + 0.13, angBack(L2, 45), K2, easeOutCubic],
+    [s2 + 0.5, blind - BEAT, K2, L3, easeInOutCubic, 150],
+    [blind - BEAT, blind, L3, angBack(L3, -40), easeInOutCubic],
+    [blind, blind + 0.45, angBack(L3, -40), B3, easeOutCubic],
+    [blind + 0.45, last - BEAT, B3, L4, easeInOutCubic],
+    [last - BEAT, last, L4, angBack(L4, 30), easeInQuad],
+    [last, last + 0.13, angBack(L4, 30), K4, easeOutCubic],
+    [last + 0.35, T(45) + BEAT, K4, { x: W + 380, y: 1650, rot: 0.6 }, easeInQuad],
+  ];
+})();
 function anglerAt(t) {
-  const u = phase(t, T(45), 8 * BAR); if (u <= 0 || u >= 1) return null;
-  const inn = easeOutCubic(phase(t, T(45), 2 * BAR)), out = phase(t, T(51), 2 * BAR) ** 2;
-  const x = lerp(W + 240, 800, inn) + 460 * out, y = 0.34 * H + 30 * Math.sin(t * 0.5) + 60 * out;
-  const kk = kickAt(t + LEAD), kick = kickEnv(t + LEAD), flare = kk && kk.down ? Math.exp(-3 * kk.age / 0.5) : 0;
-  const gape = 0.3 + 0.25 * Math.sin(t * 1.3) + 0.3 * flare;
-  return { x, y, gape, lx: x - 175 + 10 * Math.sin(t * 1.1), ly: y - 70 + 14 * Math.sin(t * 2), lr: 11 + 7 * kick + 12 * flare };
+  if (t < T(29) || t >= T(45) + BEAT) return null;
+  const tt = t + LEAD, { lure, s1, s2, blind, last } = ANG;
+  let seg = AP[0];
+  for (const s of AP) if (tt >= s[0]) seg = s;
+  const [t0, t1, A, B, ease, arc] = seg;
+  const u = ease === 'pulse' ? easeInOutCubic(pulseProg(t0, t1, tt)) : ease ? ease(clamp((tt - t0) / (t1 - t0), 0, 1)) : 0;
+  const x = lerp(A.x, B.x, u) + (arc || 0) * Math.sin(Math.PI * u), y = lerp(A.y, B.y, u) + 16 * Math.sin(t * 0.6), rot = lerp(A.rot, B.rot, u) + 0.04 * Math.sin(t * 0.8);
+  // Jaw: breathes, gapes over the beat before a strike, snaps shut on the stab and relaxes.
+  const base = 0.22 + 0.1 * Math.sin(t * 1.3);
+  let gape = base;
+  for (const s of [s1, s2, last]) {
+    if (tt >= s - BEAT && tt < s) gape = lerp(base, 1.15, easeInQuad((tt - s + BEAT) / BEAT));
+    else if (tt >= s && tt < s + 1.1) gape = tt < s + 0.25 ? lerp(1.15, 0.02, easeOutCubic(phase(tt, s, 0.1))) : lerp(0.02, base, easeInOutCubic(phase(tt, s + 0.25, 0.8)));
+  }
+  if (tt >= blind - BEAT && tt < blind + 1.5 * BAR) gape = tt < blind ? lerp(base, 0.7, phase(tt, blind - BEAT, BEAT)) : lerp(1.0, base, easeInOutCubic(phase(tt, blind + 0.2, 1.3 * BAR)));
+  // Lure: lights on the first stab, pulses on the kick, flares on each stab; the lamp blows it out
+  // at the blinding and it flickers back on for the last snap, then dims as the fish sinks away.
+  const kick = kickEnv(tt), since = s => tt >= s ? Math.exp(-3 * (tt - s) / 0.6) : 0;
+  const out = tt >= blind && tt < last ? (tt < blind + 0.3 && rngFor('lureout' + Math.floor(tt * 16))() > 0.5 ? 0.5 : 0) : 1;
+  const on = (tt >= lure ? 1 : 0) * out * (1 - 0.8 * phase(tt, last + 0.35, 2 * BAR));
+  const lr = on * (10 + 6 * kick + 18 * since(lure) + 10 * (since(s1) + since(s2) + since(last)));
+  const tw = 10 * Math.sin(t * 2.6) + 26 * Math.sin(18 * (tt - s1)) * (since(s1) + since(s2) + since(blind));   // tail thrashes on the hits
+  return { x, y, rot, gape, lr, tw, llx: -175 + 10 * Math.sin(t * 1.1), lly: -70 + 14 * Math.sin(t * 2), vis: phase(tt, lure, 2 * BAR) };
 }
+// A point in the fish's own frame (unscaled, facing left) to screen.
+function angPt(a, lx, ly) { const c = Math.cos(a.rot) * ANG.S, s = Math.sin(a.rot) * ANG.S; return [a.x + lx * c - ly * s, a.y + lx * s + ly * c]; }
+function angFrame(g, a) { g.translate(a.x, a.y); g.rotate(a.rot); g.scale(ANG.S, ANG.S); }
 function anglerBody(g, a) {                              // facing left, jaw open by gape
   const G = a.gape;
-  g.save(); g.translate(a.x, a.y);
+  g.save(); angFrame(g, a);
   g.beginPath(); g.moveTo(-122, -12 - 40 * G);
   g.bezierCurveTo(-110, -92, -20, -112, 60, -70); g.bezierCurveTo(110, -45, 130, -12, 150, -6);
-  g.lineTo(232, -62); g.lineTo(214, 0); g.lineTo(232, 62); g.lineTo(150, 6);
+  g.lineTo(232, -62 + a.tw); g.lineTo(214, a.tw * 0.6); g.lineTo(232, 62 + a.tw); g.lineTo(150, 6);
   g.bezierCurveTo(120, 52, 40, 96, -40, 82); g.bezierCurveTo(-92, 72, -126, 42, -130, 14 + 30 * G);
   g.lineTo(-44, 4); g.closePath(); g.fill();
-  g.lineWidth = 4; g.lineCap = 'round'; g.beginPath(); g.moveTo(-30, -102); g.quadraticCurveTo(-110, -150, a.lx - a.x, a.ly - a.y); g.stroke();   // the stalk
+  g.lineWidth = 4; g.lineCap = 'round'; g.beginPath(); g.moveTo(-30, -102); g.quadraticCurveTo(-110, -150, a.llx, a.lly); g.stroke();   // the stalk
   g.restore();
 }
-function anglerMouth(g, a) { const G = a.gape; g.save(); g.translate(a.x, a.y); g.beginPath(); g.moveTo(-118, -10 - 38 * G); g.lineTo(-46, 4); g.lineTo(-126, 12 + 28 * G); g.closePath(); g.fill(); g.restore(); }
+function anglerMouth(g, a) { const G = a.gape; g.save(); angFrame(g, a); g.beginPath(); g.moveTo(-118, -10 - 38 * G); g.lineTo(-46, 4); g.lineTo(-126, 12 + 28 * G); g.closePath(); g.fill(); g.restore(); }
 function anglerTeeth(g, a) {
-  const G = a.gape; g.save(); g.translate(a.x, a.y); g.beginPath();
+  const G = a.gape; g.save(); angFrame(g, a); g.beginPath();
   for (let k = 0; k < 6; k++) {
     const u = k / 6 + 0.06, ux = lerp(-116, -52, u), uy = lerp(-10 - 38 * G, 2, u), lx = lerp(-124, -52, u), ly = lerp(12 + 28 * G, 6, u), h = 20 * (1 - u * 0.6);
     g.moveTo(ux - 4, uy); g.lineTo(ux + 4, uy); g.lineTo(ux, uy + h); g.closePath();
@@ -1422,7 +1484,12 @@ function combsAt(t) {
 // The creatures' lights as one list of dots {x, y, r, ink}; their translucent bodies as ghosts.
 function creatureLights(st) {
   const out = [], ghosts = [], t = st.t;
-  if (st.angler) out.push({ x: st.angler.lx, y: st.angler.ly, r: st.angler.lr, ink: 'sunflower' }, { x: st.angler.x - 72, y: st.angler.y - 32, r: 7, ink: 'pink' });
+  const a = st.angler;
+  if (a) {
+    const [lx, ly] = angPt(a, a.llx, a.lly), [ex, ey] = angPt(a, -72, -32);
+    if (a.lr > 0.5) out.push({ x: lx, y: ly, r: a.lr, ink: 'sunflower' });
+    if (a.vis > 0.3) out.push({ x: ex, y: ey, r: 7 * ANG.S, ink: 'pink' });
+  }
   for (const b of st.siph || []) { if (b.b > 0.55) out.push(b); else ghosts.push({ x: b.x, y: b.y, rx: b.r, ry: b.r, rot: 0 }); }
   const speed = 1.2 + 1.6 * M.val('high', t);
   for (const c of st.combs) {
@@ -1545,9 +1612,13 @@ function stateAt(t) {
   let lamp = clamp(sub.dive * 1.4, 0, 1);
   if (p.id === 'trans') lamp *= 0.75 + 0.25 * (rngFor('flick' + Math.floor(t * 12))() > 0.3 ? 1 : 0);
   lamp *= 0.85 + 0.25 * kick;
+  // Anglerfish scene: the lamp stutters after each strike and flares into the fish's face on the blinding.
+  const tl = t + LEAD, shaken = (tl >= ANG.s1 && tl < ANG.s1 + 0.6) || (tl >= ANG.s2 && tl < ANG.s2 + 1.0);
+  if (shaken) lamp *= rngFor('aflick' + Math.floor(tl * 14))() > 0.45 ? 1 : 0.15;
+  const flare = tl >= ANG.blind ? Math.exp(-3 * (tl - ANG.blind) / 1.4) : 0;
   const jel = jellyAt(t);
   const rise = p.id === 'breakdown' ? phase(t, T(68), 4 * BAR) ** 0.8 : 0;   // riser tension: tracking band
-  const st = { t, p, S, k, kick, bass, hat, dm, sub, lamp, rise, jel, jx: jel ? jel.x : 0, jy: jel ? jel.y : 0,
+  const st = { t, p, S, k, kick, bass, hat, dm, sub, lamp, flare, rise, jel, jx: jel ? jel.x : 0, jy: jel ? jel.y : 0,
                surf: SURF0 - S, drop: t + LEAD >= T(73), inside: t >= T(99) };
   // Camera: identity until bar 97, then it flies in with the sub (the sub keeps its screen size).
   const f = subAt(T(97)), zu = phase(t, T(97), 2 * BAR), ez = easeInOutCubic(zu);
@@ -1817,14 +1888,19 @@ function backgroundPlate(name, st) {
   bands.push({ coverage: Math.min(1, ROCK[name] * (0.85 + 0.15 * dm1) + 0.12), draw: g => wallLedges(g, st) });
   for (const f of st.fish) bands.push({ over: (f.L > 55 ? 0.62 : 0.36) * (1 - 0.5 * dm1) * (name === 'pink' ? 0 : 1), draw: g => { g.beginPath(); fishSil(g, f.x, f.y, f.L, f.dir, f.wag, f.i); g.fill(); } });
   if (st.manta) bands.push({ over: name === 'pink' ? 0 : 0.6, draw: g => mantaShape(g, st.manta) });
-  if (st.angler) {                                        // a shade darker than the water, the mouth darker still
-    bands.push({ over: 0.4, draw: g => anglerBody(g, st.angler) });
-    bands.push({ over: 0.7, draw: g => anglerMouth(g, st.angler) });
-    bands.push({ coverage: 0, draw: g => anglerTeeth(g, st.angler) });
-  }
   if (st.lamp > 0.02) {                                   // the beam lifts the water: a wide soft cone and a hot core
     bands.push({ lift: 0.5 * st.lamp, draw: g => beam(g, st, 1, 1.5, 1050) });
     bands.push({ lift: 0.85 * st.lamp, draw: g => beam(g, st, 1, 0.7, 760) });
+  }
+  if (st.flare > 0.02) {                                  // the glare: a round burst at the lamp and a hot core down the beam
+    for (const [r, a] of [[900, 0.5], [520, 0.65], [260, 0.85]]) bands.push({ lift: a * st.flare, draw: g => { const [x, y] = nose(st); g.save(); g.setTransform(K, 0, 0, K, 0, 0); glowFill(g, x, y, r, 1, 0.2); g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill(); g.restore(); } });
+    bands.push({ lift: 0.8 * st.flare, draw: g => beam(g, st, 1, 1.0, 900) });
+  }
+  const an = st.angler;
+  if (an) {                                               // a silhouette even in the beam; the mouth darker still
+    bands.push({ over: 0.45 * an.vis, draw: g => anglerBody(g, an) });
+    bands.push({ over: 0.75 * an.vis, draw: g => anglerMouth(g, an) });
+    if (an.vis > 0.3) bands.push({ coverage: 0, draw: g => anglerTeeth(g, an) });
   }
   if (st.ghosts.length) bands.push({ lift: 0.3, draw: g => ghostPath(g, st.ghosts) });   // translucent bodies
   if (st.lights.length) {                                 // the creatures' lights: soft glow, then paper
@@ -1876,8 +1952,8 @@ function drawArt(t) {
   inkPass(ctx, 'blue', { coverage: 0.4 }, g => subWindow(g, st));
   inkPass(ctx, 'sunflower', {}, g => subStripe(g, st));
   if (st.lamp > 0.02) {
-    fastBandPass(ctx, 'sunflower', {}, [{ coverage: 0.9 * st.lamp, draw: g => beam(g, st, 1, 0.55, 520) }, { coverage: 1, draw: g => subLampDot(g, st) },
-      { coverage: 0, draw: g => { subBody(g, st); if (st.school) schoolPath(g, st.school, -1, 1); } }, { coverage: 1, draw: g => subLampDot(g, st) }]);
+    fastBandPass(ctx, 'sunflower', {}, [{ coverage: Math.min(1, 0.9 * st.lamp + 0.3 * st.flare), draw: g => beam(g, st, 1, 0.55 + 0.4 * st.flare, 520) }, { coverage: 1, draw: g => subLampDot(g, st) },
+      { coverage: 0, draw: g => { subBody(g, st); if (st.school) schoolPath(g, st.school, -1, 1); if (st.angler) anglerBody(g, st.angler); } }, { coverage: 1, draw: g => subLampDot(g, st) }]);
     fastBandPass(ctx, 'pink', {}, [{ coverage: 0.5 * st.lamp, draw: g => { const [x, y] = nose(st); g.setTransform(K, 0, 0, K, 0, 0); glowFill(g, x, y, 90, 1, 0.3); g.beginPath(); g.arc(x, y, 90, 0, TAU); g.fill(); } },
       { coverage: 0, draw: g => subBody(g, st) }]);
   }
