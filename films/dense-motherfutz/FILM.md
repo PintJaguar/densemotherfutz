@@ -393,3 +393,22 @@ Stücken, nicht in einem Prozess.
 ## Offen
 
 - Gegen das Gehör prüfen: Drop auf 133,0? Gruppe ab Takt 41 wirklich ein neues Element?
+
+## Änderungen 2026-10-01 (Nutzer)
+
+- **Schwarm über dem Boot (Takt 65–72):** der Ring kreist flacher (von leicht oben gesehen, Mitte = Boot);
+  Fische der nahen Hälfte (`SF`, Z < 0) werden nach dem Bootskörper aus den Wasserplatten, aus Fenster und
+  Streifen und aus dem Lampenpunkt geschnitten und drucken darüber. Das Boot sitzt sichtbar in der Mitte.
+- **Qualle ohne Beat:** keine Kontraktion, kein Vorstoß, keine Tentakel-/Armverzögerung auf der Kick mehr.
+- **Quallen-Sonar auf der Trompete:** `TRUMPS` (Takt 73–96, 3 pro Takt; Zeiten aus dem pixelfutz-Dossier,
+  Schläge nach Taktbeginn gerade/ungerade Takte 1,59/2,50/3,30 und 1,47/2,52/3,17). Pro Ton: Flash an der
+  Glocke, feiner Ring + gepunkteter + gestrichelter Nachläufer, drehende Vier-Punkt-Sterne; Wasser wird
+  vorher aus den Platten gehoben (`st.bursts`, Band in `backgroundPlate`), Pink 70 %, Sunflower 60 %.
+  Sender bleibt dort, wo die Qualle beim Ton war (`jellyAt(k.t)`). Alte Kick-Druckwellen sind entfernt.
+
+**Voll-Render neu (2026-10-01)** mit Schwarm-Ring um das Boot, Qualle ohne Beat und Trompeten-Sonar: Stücke
+0–112 s unverändert, 112–192 s neu in acht-Sekunden-Stücken (`out/seg-9x16-112…184.mp4`), per ffmpeg-concat
+verkettet, einmal mit `track.wav` gemuxt: **`out/dense-motherfutz-9x16-v2.mp4`**, 1080×1920, 30 fps, 192,00 s,
+Frames je Stück 480/240 gezählt (Summe 5760). `out/dense-motherfutz-9x16.mp4` ist noch der Stand davor
+(war beim Umbenennen gesperrt). Nicht angesehen: das fertige Gesamtvideo in Bewegung (nur Ausschnitt
+118–160 s und Stills).

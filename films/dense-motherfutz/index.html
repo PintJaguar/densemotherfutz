@@ -1218,7 +1218,7 @@ const NSCH = 1600, NGR = 16, SFOC = 1000;
 const SU = new Float32Array(NSCH), SV = new Float32Array(NSCH), SW = new Float32Array(NSCH), SJA = new Float32Array(NSCH);
 const SJF = new Float32Array(NSCH * 3), SJP = new Float32Array(NSCH * 3), SSZ = new Float32Array(NSCH);
 const SINK = new Uint8Array(NSCH), SGRP = new Uint8Array(NSCH), SLAG = new Float32Array(NSCH), SOX = new Float32Array(NSCH), SOY = new Float32Array(NSCH);
-const SLEAVE = new Float32Array(NSCH), SLJ = new Float32Array(NSCH);
+const SLEAVE = new Float32Array(NSCH), SLJ = new Float32Array(NSCH), SF = new Uint8Array(NSCH);   // SF: this frame, 1 = in front of the sub (ring, nearer than its centre)
 const SCH_INKS = ['blue', 'sunflower', 'pink'];
 const SCH_COV = { blue: 0.42, sunflower: 1, pink: 1 };   // blue fish print as a pale tint on their paper
 const GSTART = new Float32Array(NGR), GENT = [], GCURL = new Float32Array(NGR);
@@ -1253,7 +1253,7 @@ function schoolAt(t, st) {
   const ringIn = easeInOutCubic(phase(t, T(65), 1.5 * BAR)), dropIn = easeInOutCubic(phase(t, T(73), BAR)), ring = ringIn * (1 - dropIn);
   const spin = 0.3 * Math.max(0, t - T(65)) + 3.2 * phase(t, T(68), 4 * BAR) ** 2;   // the riser spins it up
   const fl = fleeAt(t), sub = st.sub;
-  const cx = lerp(lerp(560 + 110 * Math.sin(0.13 * t), sub.x + 70, ringIn), fl[0], dropIn), cy = lerp(lerp(SUB_Y + 260 + 140 * Math.sin(0.17 * t + 1), sub.y + 30, ringIn), fl[1], dropIn);
+  const cx = lerp(lerp(560 + 110 * Math.sin(0.13 * t), sub.x + 8, ringIn), fl[0], dropIn), cy = lerp(lerp(SUB_Y + 260 + 140 * Math.sin(0.17 * t + 1), sub.y + 4, ringIn), fl[1], dropIn);
   const jel = st.jel, fearR = jel ? 110 + 360 * jel.s : 0;
   let n = 0;
   for (let i = 0; i < NSCH; i++) {
@@ -1271,7 +1271,7 @@ function schoolAt(t, st) {
     let hd = Math.atan2(2.6 * bend * Math.cos(2.6 * u + bph), L * cP);   // heading along the sheet
     if (ring > 0) {                                      // a tilted ring round the sub
       const a = u * Math.PI + spin + 0.4 * v, R = 290 + 70 * v * (1 + 0.1 * Math.sin(t + u * 5)), yr = R * Math.sin(a);
-      X = lerp(X, R * Math.cos(a) + jx, ring); Y = lerp(Y, yr * 0.36 + 25 * w + jy, ring); Z = lerp(Z, yr * 0.93 + jz, ring);
+      X = lerp(X, R * Math.cos(a) + jx, ring); Y = lerp(Y, -yr * 0.2 + 38 * w + jy, ring);   // seen from slightly above: the near arc runs across the sub Z = lerp(Z, yr * 0.93 + jz, ring);
       if (ring > 0.5) hd = Math.atan2(Math.cos(a) * 0.36, -Math.sin(a));     // circling
     }
     const Zc = SFOC + Z; if (Zc < 300) continue;
@@ -1298,15 +1298,16 @@ function schoolAt(t, st) {
       }
     }
     if (px < -20 || px > W + 20 || py < -20 || py > H + 20) continue;
-    SX[n] = px; SY[n] = py; SR[n] = (4.6 + 2.6 * SSZ[i]) * clamp(s, 0.7, 1.5); SA[n] = hd + 0.25 * Math.sin(t * 2 + i); SI[n] = SINK[i]; n++;
+    SX[n] = px; SY[n] = py; SR[n] = (4.6 + 2.6 * SSZ[i]) * clamp(s, 0.7, 1.5); SA[n] = hd + 0.25 * Math.sin(t * 2 + i); SI[n] = SINK[i]; SF[n] = ring > 0.15 && Z < 0 ? 1 : 0; n++;
   }
   return n ? { n, glow: jel ? 1 : 0.75 + 0.25 * M.val('high', t) } : null;
 }
 // All fish of one ink (-1: all) as one path, so overlapping dots union; mul scales the radius.
-function schoolPath(g, sc, ink, mul) {
+function schoolPath(g, sc, ink, mul, front = false) {   // front: only the fish nearer than the sub
   g.beginPath();
   for (let i = 0; i < sc.n; i++) {
     if (ink >= 0 && SI[i] !== ink) continue;
+    if (front && !SF[i]) continue;
     const r = SR[i] * mul, x = SX[i], y = SY[i];
     if (mul > 1) { g.moveTo(x + r, y); g.arc(x, y, r, 0, TAU); continue; }       // halo
     const c = Math.cos(SA[i]) * r, sn = Math.sin(SA[i]) * r;                   // a dash: 3.2 r long, r thick, pointed at the nose
@@ -1338,8 +1339,7 @@ function jellyAt(t) {
   if (t < T(73)) return null;
   const p = jellyPath(t), p0 = jellyPath(t - 0.2), p1 = jellyPath(t + 0.2), w = easeInOutCubic(phase(t, T(93), 4 * BAR));
   const a = lerp(Math.atan2(p1[0] - p0[0], -(p1[1] - p0[1] - 25)), 0, w);   // bell first; upright when slow or feeding
-  const lunge = 30 * jellyScale(t) * kickEnv(t + LEAD) * (1 - w);
-  return { x: p[0] + Math.sin(a) * lunge, y: p[1] - Math.cos(a) * lunge, s: jellyScale(t), a };
+  return { x: p[0], y: p[1], s: jellyScale(t), a };
 }
 
 /* ── Ending "Der Größere" (bars 97–104) ───────────────────────────────────────────
@@ -1666,6 +1666,7 @@ function stateAt(t) {
   st.manta = mantaAt(t); st.angler = anglerAt(t); st.siph = siphAt(t); st.combs = combsAt(t);
   st.fish = FISHES.map(f => fishAt(f, st)).filter(Boolean);
   Object.assign(st, creatureLights(st));
+  st.bursts = st.drop ? trumpBursts(st) : [];   // the jelly's trumpet sonar
   st.lev = t >= T(97) ? levAt(t, st) : null;
   return st;
 }
@@ -1791,31 +1792,67 @@ function bubbles(g, st, outline) {                      // stream from the sail,
 }
 // Sonar: one slow ping per bar on the 2.5 (the eighth after beat 2), bars 1–60, as a packet of four
 // thin dashed rings; it lives 1.6 bars, so two packets overlap. Water only, never in the air.
-// Jelly: a fast pressure wave on every kick of the drop, scaled with the jelly.
 const SONAR_LIFE = 1.6 * BAR, SONAR_SPEED = 250;
 const PINGS = Array.from({ length: 60 }, (_, i) => ({ t: T(i + 1) + 1.5 * BEAT, s: i < 8 ? 0.3 + 0.3 * i / 7 : i < 16 ? 0.5 : 0.85 }));
-function rings(g, st, fromJelly) {
-  if (fromJelly && (!st.jel || st.t >= T(97))) return;
-  g.save(); if (!fromJelly) belowSurface(g, st);
-  g.setLineDash(fromJelly ? [30, 16] : [12, 8]);
-  const src = fromJelly ? KICKS : PINGS, life = fromJelly ? 1.4 : SONAR_LIFE, tn = st.t + LEAD;
+function rings(g, st) {
+  g.save(); belowSurface(g, st);
+  g.setLineDash([12, 8]);
+  const src = PINGS, life = SONAR_LIFE, tn = st.t + LEAD;
   let i0 = -1;
   for (let lo = 0, hi = src.length - 1; lo <= hi;) { const m = (lo + hi) >> 1; if (src[m].t <= tn + 1e-6) { i0 = m; lo = m + 1; } else hi = m - 1; }
   for (let j = 0; j < 12; j++) {
     const k = src[i0 - j]; if (!k) break;
     const age = tn - k.t;
     if (age > life) break;
-    if (fromJelly && k.bar < 73) continue;
-    const cx = fromJelly ? st.jx : st.subS.x, cy = fromJelly ? st.jy : st.subS.y, fade = 1 - age / life;
-    if (fromJelly) {
-      const js = 0.35 + 0.65 * st.jel.s, r = (200 + age * 700) * js;
-      g.lineWidth = 7 * fade * (0.5 + 0.5 * k.s) + 1.5; g.beginPath(); g.arc(cx, cy, r, 0, TAU); g.stroke();
-    } else for (let q = 0; q < 4; q++) {
+    const cx = st.subS.x, cy = st.subS.y, fade = 1 - age / life;
+    for (let q = 0; q < 4; q++) {
       const r = 30 + age * SONAR_SPEED - q * 38; if (r < 12) continue;
       g.lineWidth = (4 - q * 0.5) * fade * (0.5 + 0.5 * k.s) + 1; g.beginPath(); g.arc(cx, cy, r, 0, TAU); g.stroke();
     }
   }
   g.setLineDash([]); g.restore();
+}
+/* Jelly sonar: it answers the trumpet, not the kick. Three stabs a bar in bars 73–96, slightly off the grid;
+   beats into the bar (even / odd bars) measured from the mp3 in the pixelfutz track dossier (±25 ms).
+   Each stab is a flash at the bell and a burst that stays where the jelly was: a fine ring with two
+   trailing ones (dotted, dashed) and a turning crown of four-point stars. Printed pale: pink at 70 %, a thin
+   sunflower ring over it (prints orange). Pure in t: the emitter position is jellyAt(stab time).            */
+const TRUMP_T = [[1.59, 2.50, 3.30], [1.47, 2.52, 3.17]];
+const TRUMPS = [];
+for (let b = 73; b <= 96; b++) for (let n = 0; n < 3; n++) TRUMPS.push({ t: T(b) + TRUMP_T[b & 1][n] * BEAT, n, bar: b, i: TRUMPS.length });
+const TSON_LIFE = 1.3;
+function trumpBursts(st) {
+  const tn = st.t + LEAD, out = [];
+  for (const k of TRUMPS) {
+    const age = tn - k.t; if (age < 0 || age > TSON_LIFE) continue;
+    const jp = jellyAt(k.t); if (!jp) continue;
+    out.push({ k, age, js: 0.35 + 0.65 * jp.s, x: jp.x, y: jp.y - 90 * jp.s, fade: 1 - age / TSON_LIFE });
+  }
+  return out;
+}
+function starPath(g, x, y, R, rot) {                        // four-point star, concave
+  g.moveTo(x + Math.cos(rot) * R, y + Math.sin(rot) * R);
+  for (let j = 1; j < 8; j++) { const a = rot + j * Math.PI / 4, rr = j & 1 ? R * 0.28 : R; g.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); }
+  g.closePath();
+}
+function jellySonar(g, bursts, layer) {
+  g.lineCap = 'round';
+  for (const { k, age, js, x, y, fade } of bursts) {
+    const f2 = fade * fade, rad = a => (70 + 1000 * (1 - Math.exp(-a * 2.8))) * js, r0 = rad(age);
+    if (layer === 0) {
+      g.lineWidth = 4 + 5 * f2; g.setLineDash([]); g.beginPath(); g.arc(x, y, r0, 0, TAU); g.stroke();
+      if (age > 0.08) { g.lineWidth = 5 + 8 * f2; g.setLineDash([0.5, 19]); g.beginPath(); g.arc(x, y, rad(age - 0.08), 0, TAU); g.stroke(); }
+      if (age > 0.17) { g.lineWidth = 3 + 2 * f2; g.setLineDash([22, 26]); g.lineDashOffset = -age * 140; g.beginPath(); g.arc(x, y, rad(age - 0.17), 0, TAU); g.stroke(); g.lineDashOffset = 0; }
+      g.setLineDash([]);
+    } else { g.lineWidth = 1.5 + 1.5 * f2; g.beginPath(); g.arc(x, y, r0 * 0.96, 0, TAU); g.stroke(); }
+    const cnt = 10 + 2 * k.n;
+    g.beginPath();
+    for (let i = 0; i < cnt; i++) {
+      const a = i * TAU / cnt + k.i * 0.7 + age * 0.6, sz = (9 + 11 * (0.5 + 0.5 * Math.sin(i * 2.3 + k.i))) * (layer ? 0.55 : 1) * (0.25 + 0.75 * fade) * (0.6 + 0.4 * js);
+      starPath(g, x + Math.cos(a) * r0, y + Math.sin(a) * r0, sz, a + age * 2);
+    }
+    g.fill();
+  }
 }
 function sun(g, st) {
   if (st.surf < -10) return;
@@ -1832,7 +1869,7 @@ function glints(g, st) {
   for (let k = 0; k < 22; k++) { const y = st.surf + 14 + k * 9, w = (170 - k * 6) * (0.5 + r()); g.fillRect(740 - w / 2 + (r() - 0.5) * 60, y, w, 2 + (k < 4 ? 2 : 0)); }
 }
 function bellPath(g, st, scale) {                      // dome with a scalloped rim; contracts on the kick
-  const pulse = st.kick, R = 300 * scale, wx = R * (1 - 0.1 * pulse), hy = R * 0.78 * (1 + 0.08 * pulse);
+  const pulse = 0, R = 300 * scale, wx = R * (1 - 0.1 * pulse), hy = R * 0.78 * (1 + 0.08 * pulse);
   const cx = st.jx, cy = st.jy;
   g.moveTo(cx - wx, cy);
   g.bezierCurveTo(cx - wx, cy - hy * 1.25, cx + wx, cy - hy * 1.25, cx + wx, cy);
@@ -1843,17 +1880,17 @@ function jellyBell(g, st, scale = 1) { g.beginPath(); bellPath(g, st, scale); g.
 // The rim as one even-odd ring, no compositing: a band draws its shapes twice (erase, then paint).
 function jellyRim(g, st) { g.beginPath(); bellPath(g, st, 1); bellPath(g, st, 0.9); g.fill('evenodd'); }
 function jellyEdge(g, st, w) {                           // rim light along the top of the dome
-  const pulse = st.kick, wx = 300 * (1 - 0.1 * pulse), hy = 300 * 0.78 * (1 + 0.08 * pulse);
+  const pulse = 0, wx = 300 * (1 - 0.1 * pulse), hy = 300 * 0.78 * (1 + 0.08 * pulse);
   g.lineWidth = w; g.lineCap = 'round'; g.beginPath(); g.moveTo(st.jx - wx * 0.98, st.jy - 12);
   g.bezierCurveTo(st.jx - wx * 0.98, st.jy - hy * 1.22, st.jx + wx * 0.98, st.jy - hy * 1.22, st.jx + wx * 0.98, st.jy - 12); g.stroke();
 }
 function jellyRibs(g, st) {
-  const pulse = st.kick, R = 300, wx = R * (1 - 0.1 * pulse), hy = R * 0.78 * (1 + 0.08 * pulse);
+  const pulse = 0, R = 300, wx = R * (1 - 0.1 * pulse), hy = R * 0.78 * (1 + 0.08 * pulse);
   g.lineCap = 'round'; g.lineWidth = 6;
   for (let k = 1; k < 10; k++) { const u = k / 10; g.beginPath(); g.moveTo(st.jx, st.jy - hy * 0.92); g.quadraticCurveTo(st.jx + (u - 0.5) * wx * 2.1, st.jy - hy * 0.7, st.jx + (u - 0.5) * wx * 1.9, st.jy + 10); g.stroke(); }
 }
 function jellyGonads(g, st, inner) {                  // four clover petals round the axis
-  const hy = 300 * 0.78 * (1 + 0.08 * st.kick), cx = st.jx, cy = st.jy - hy * 0.3;
+  const hy = 300 * 0.78, cx = st.jx, cy = st.jy - hy * 0.3;
   for (let k = 0; k < 4; k++) {
     const ang = -Math.PI / 2 + (k - 1.5) * 0.62, L = inner ? 40 : 70, w = inner ? 11 : 24;
     g.save(); g.translate(cx + Math.cos(ang) * 18, cy + Math.sin(ang) * 10); g.rotate(ang);
@@ -1863,19 +1900,19 @@ function jellyGonads(g, st, inner) {                  // four clover petals roun
 }
 function tentacles(g, st, hl) {                          // long thin tentacles, waves travelling down, lag the pulse
   g.lineCap = 'round';
-  const wx = 300 * (1 - 0.1 * st.kick);
+  const wx = 300;
   for (let k = 0; k < 20; k++) {
     const bx = st.jx - wx * 0.94 + k * wx * 1.88 / 19, L = (700 + 260 * Math.sin(k * 2.3)) * (0.7 + 0.3 * YS);
     g.lineWidth = hl ? 1.6 : 3.5 + (k % 3) * 1.5;
     g.beginPath(); g.moveTo(bx + (hl ? 2 : 0), st.jy + 20);
-    for (let s = 0; s <= L; s += 18) { const u = s / L; g.lineTo(bx + (hl ? 2.5 : 0) + (46 * u + 10) * Math.sin(s * 0.016 - st.t * 3 + k) + (k - 9.5) * 12 * u, st.jy + 20 + s * (1 - 0.12 * kickEnv(st.t - u * 0.25, 0.4))); }
+    for (let s = 0; s <= L; s += 18) { const u = s / L; g.lineTo(bx + (hl ? 2.5 : 0) + (46 * u + 10) * Math.sin(s * 0.016 - st.t * 3 + k) + (k - 9.5) * 12 * u, st.jy + 20 + s); }
     g.stroke();
   }
 }
 function oralArms(g, st) {                               // four frilled ribbons, spreading and curling
   for (let k = 0; k < 4; k++) {
     const bx = st.jx + (k - 1.5) * 34, L = (420 + 110 * ((k * 7) % 3)) * (0.7 + 0.3 * YS), pts = [];
-    for (let s = 0; s <= L; s += 12) { const u = s / L; pts.push([bx + 80 * u * Math.sin(s * 0.013 - st.t * 1.8 + k * 1.7) + (k - 1.5) * 95 * u, st.jy + 20 + s * (1 - 0.1 * kickEnv(st.t - u * 0.3, 0.4))]); }
+    for (let s = 0; s <= L; s += 12) { const u = s / L; pts.push([bx + 80 * u * Math.sin(s * 0.013 - st.t * 1.8 + k * 1.7) + (k - 1.5) * 95 * u, st.jy + 20 + s]); }
     const wid = (i, side) => (22 * (1 - i / pts.length) + 4) * (1 + 0.5 * Math.sin(i * 1.9 + st.t * 5 + side * 2));
     g.beginPath();
     pts.forEach(([x, y], i) => i ? g.lineTo(x + wid(i, 0), y) : g.moveTo(x + wid(i, 0), y));
@@ -1948,6 +1985,11 @@ function backgroundPlate(name, st) {
     bands.push({ coverage: 0, draw: g => dotsPath(g, st.lights, null, 1) });
   }
   if (st.lev) levBands(name, st, bands);                  // the leviathan behind the jelly: dark overprints, lit organs, the eye
+  if (st.bursts.length) {                                 // trumpet sonar: the water opens along the rings and stars, so the pink prints pale and bright
+    const fl = st.bursts.filter(b => b.age < 0.3);
+    if (fl.length) bands.push({ lift: 0.8, draw: g => fl.forEach(b => { glowFill(g, b.x, b.y, 520 * b.js, 0.9 * Math.exp(-b.age * 11), 0.3); g.beginPath(); g.arc(b.x, b.y, 520 * b.js, 0, TAU); g.fill(); }) });
+    bands.push({ lift: 0.7, draw: g => jellySonar(g, st.bursts, 0) });
+  }
   if (st.jel) {                                           // the jelly's glow opening the water, then its body
     bands.push({ lift: 1, draw: g => jellies(g, st, (g, s) => { glowFill(g, s.jx, s.jy - 80, 820, 0.7, 0.4); g.beginPath(); g.arc(s.jx, s.jy - 80, 820, 0, TAU); g.fill(); }) });
     bands.push({ coverage: 0, draw: g => jellies(g, st, jellySil) });
@@ -1960,6 +2002,7 @@ function backgroundPlate(name, st) {
     bands.push({ coverage: 0, draw: g => schoolPath(g, sc, -1, 1) });
   }
   bands.push({ coverage: SUBDARK[name], draw: g => subBody(g, st) });
+  if (sc) bands.push({ coverage: 0, draw: g => schoolPath(g, sc, -1, 1, true) });   // the ring's near fish cover the sub
   bands.push({ coverage: 0, draw: g => brights(g, st) });
   fastBandPass(ctx, name, {}, bands);
 }
@@ -2074,18 +2117,26 @@ function drawArt(t) {
   });
 
   // Sub: aqua rim light and window, florange stripe, the lamp in the nose with its beam.
-  inkPass(ctx, 'blue', { coverage: 0.4 }, g => subWindow(g, st));
-  inkPass(ctx, 'sunflower', {}, g => subStripe(g, st));
+  const subCut = g => { if (st.school) { g.globalCompositeOperation = 'destination-out'; schoolPath(g, st.school, -1, 1, true); g.globalCompositeOperation = 'source-over'; } };
+  inkPass(ctx, 'blue', { coverage: 0.4 }, g => { subWindow(g, st); subCut(g); });
+  inkPass(ctx, 'sunflower', {}, g => { subStripe(g, st); subCut(g); });
   if (st.lamp > 0.02) {
     fastBandPass(ctx, 'sunflower', {}, [{ coverage: Math.min(1, 0.9 * st.lamp + 0.3 * st.flare), draw: g => beam(g, st, 1, 0.55 + 0.4 * st.flare, 520) }, { coverage: 1, draw: g => subLampDot(g, st) },
-      { coverage: 0, draw: g => { subBody(g, st); if (st.school) schoolPath(g, st.school, -1, 1); if (st.angler) anglerBody(g, st.angler); } }, { coverage: 1, draw: g => subLampDot(g, st) }]);
+      { coverage: 0, draw: g => { subBody(g, st); if (st.school) schoolPath(g, st.school, -1, 1); if (st.angler) anglerBody(g, st.angler); } }, { coverage: 1, draw: g => subLampDot(g, st) },
+      ...(st.school ? [{ coverage: 0, draw: g => schoolPath(g, st.school, -1, 1, true) }] : [])]);
     fastBandPass(ctx, 'pink', {}, [{ coverage: 0.5 * st.lamp, draw: g => { const [x, y] = nose(st); g.setTransform(K, 0, 0, K, 0, 0); glowFill(g, x, y, 90 * st.zk, 1, 0.3); g.beginPath(); g.arc(x, y, 90 * st.zk, 0, TAU); g.fill(); } },
       { coverage: 0, draw: g => subBody(g, st) }]);
   }
 
   // Sonar, confetti and bubbles over paper.
-  inkPass(ctx, 'blue', { alpha: 0.2 }, g => { g.strokeStyle = '#000'; rings(g, st, false); });
-  if (st.drop) inkPass(ctx, 'pink', {}, g => { g.strokeStyle = '#000'; rings(g, st, true); });
+  inkPass(ctx, 'blue', { alpha: 0.2 }, g => { g.strokeStyle = '#000'; rings(g, st); });
+  const bursts = st.bursts;
+  if (bursts.length) {
+    const fl = bursts.filter(b => b.age < 0.3);
+    if (fl.length) fastBandPass(ctx, 'pink', {}, [{ coverage: 1, draw: g => fl.forEach(b => { glowFill(g, b.x, b.y, 520 * b.js, 0.7 * Math.exp(-b.age * 11), 0.3); g.beginPath(); g.arc(b.x, b.y, 520 * b.js, 0, TAU); g.fill(); }) }]);
+    inkPass(ctx, 'pink', { alpha: 0.7 }, g => { g.strokeStyle = g.fillStyle = '#000'; jellySonar(g, bursts, 0); });
+    inkPass(ctx, 'sunflower', { alpha: 0.6 }, g => { g.strokeStyle = g.fillStyle = '#000'; jellySonar(g, bursts, 1); });
+  }
   inkPass(ctx, 'blue', { alpha: 0.5 }, g => { g.strokeStyle = '#000'; g.lineWidth = 1.6; bubbles(g, st, true); });
   CAM = { z: 1, fx: 0, fy: 0, ox: 0, oy: 0 };
   // Drop flash.
