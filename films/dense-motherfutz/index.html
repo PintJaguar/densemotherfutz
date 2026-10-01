@@ -1061,7 +1061,8 @@ function vhs(ctx, t, o = {}) {
 
 // ART BEGIN: Dense Motherfutz, 9:16 (1:1 with ?aspect=1:1). A small sub sinks through the track:
 // sunset surface, sunlit shallows and reef, a bioluminescent school, the deep, and a jellyfish that
-// hunts the school, grows, swallows the sub and ends the film inside its bell.
+// hunts the school, grows and closes over the sub; the camera pulls back: the jelly is only the
+// lure of something colossal, whose eye opens on the last bar.
 // Timing comes from the measured bar grid (FILM.md), not from M.sections: 130 BPM, bar 1 at 0.054 s.
 const BEAT = 60 / 130, BAR = 4 * BEAT, D0 = 0.054;
 const T = n => D0 + (n - 1) * BAR;                       // start of bar n (1-based)
@@ -1301,15 +1302,6 @@ function schoolAt(t, st) {
   }
   return n ? { n, glow: jel ? 1 : 0.75 + 0.25 * M.val('high', t) } : null;
 }
-// Inside the bell: the swallowed fish circling the chamber.
-function innerFish(st) {
-  const R = innerR(st), n = 150;
-  for (let i = 0; i < n; i++) {
-    const a = i * 2.39996 + st.t * (0.25 + 0.15 * (i % 3)), r = (150 + 480 * ((i * 0.618) % 1)) * R;
-    SX[i] = IC[0] + Math.cos(a) * r * 0.62; SY[i] = IC[1] + Math.sin(a) * r; SR[i] = 4.2 + 2 * ((i * 0.37) % 1); SA[i] = a + Math.PI / 2; SI[i] = i % 3;
-  }
-  return { n, glow: 1 };
-}
 // All fish of one ink (-1: all) as one path, so overlapping dots union; mul scales the radius.
 function schoolPath(g, sc, ink, mul) {
   g.beginPath();
@@ -1326,8 +1318,7 @@ function schoolPath(g, sc, ink, mul) {
 
 /* The jelly: slams in at 20 % on the drop and chases the school, lunging on the kick; it grows ten
    points on the downbeat of every fourth bar (bars 77, 81, … 97: 20 -> 80 %), turns on the sub in
-   bars 93–96 and closes over it on bar 97. The camera then flies in with the sub (bars 97–98) and
-   the outro plays inside the bell.                                                               */
+   bars 93–96 and closes over it on bar 97; then the camera pulls back and it hangs as a lure (LV).  */
 function jellyScale(t) {
   if (t < T(73)) return 0.2;
   const b = (t - T(73)) / BAR, k = Math.min(6, Math.floor(b / 4));
@@ -1339,7 +1330,9 @@ function jellyPath(t) {
   const w = easeInOutCubic(phase(t, T(93), 4 * BAR));
   if (w <= 0) return c;
   const s = subAt(Math.min(t, T(97))), cap = [s.x, s.y + 0.35 * 300 * jellyScale(t)];   // the sub inside the dome
-  return [lerp(c[0], cap[0], w), lerp(c[1], cap[1], w)];
+  if (t <= T(97)) return [lerp(c[0], cap[0], w), lerp(c[1], cap[1], w)];
+  const sw = levSway(t);                                                 // hanging on its rod: a slow sway
+  return [lerp(c[0], cap[0], w) + sw[0], lerp(c[1], cap[1], w) + sw[1]];
 }
 function jellyAt(t) {
   if (t < T(73)) return null;
@@ -1349,6 +1342,79 @@ function jellyAt(t) {
   return { x: p[0] + Math.sin(a) * lunge, y: p[1] - Math.cos(a) * lunge, s: jellyScale(t), a };
 }
 
+/* ── Ending "Der Größere" (bars 97–104) ───────────────────────────────────────────
+   The jelly has swallowed the sub, and then the camera pulls back: the jelly is only the lure on the
+   rod of something colossal. World scale stays the jelly's; the creature is authored in the final
+   screen frame (1080 x 1920 px at the end of the pull-back, zoom LV.zEnd) and hung on the jelly by
+   levG(): what is 1 px in that frame is 1/zEnd world px, so line widths and the size of the eye are
+   read straight off the last frame. Bodies are darker overprints of the three sea plates; the lights
+   are paper cut out of them and printed pink / sunflower. Kicks light the flank organs one by one;
+   on the downbeat of bar 104 the eye opens.                                                        */
+const LV = (() => {
+  const zEnd = 0.26, O = [190, 330], E = [600, 900], th = 0.95, cs = Math.cos(th), sn = Math.sin(th), eyeRot = -0.66;
+  const s97 = subAt(T(97)), J = [s97.x, s97.y + 0.35 * 300 * 0.8];       // the jelly's anchor once the bell has closed and settled
+  const fs = (x, y) => [E[0] + cs * x - sn * y, E[1] + sn * x + cs * y];   // body frame -> final screen
+  const r = rngFor('leviathan');
+  const T0 = [-600, 92], C = [-70, 262], c1 = [-470, 175], c2 = [-250, 245];   // upper lip, tip to jaw hinge, as a cubic
+  const lipAt = s => { const m = 1 - s, a = m * m * m, b = 3 * m * m * s, c = 3 * m * s * s, d = s * s * s; return [a * T0[0] + b * c1[0] + c * c2[0] + d * C[0], a * T0[1] + b * c1[1] + c * c2[1] + d * C[1]]; };
+  const lip = Array.from({ length: 25 }, (_, k) => lipAt(k / 24));
+  const DORS = [[-90, -370], [200, -450], [700, -540], [1300, -580], [2300, -540]], BELL = [[-20, 470], [250, 600], [650, 700], [1300, 760], [2300, 700]];
+  const edgeY = (pts, x) => { for (let i = 1; i < pts.length; i++) if (x <= pts[i][0]) return lerp(pts[i - 1][1], pts[i][1], (x - pts[i - 1][0]) / (pts[i][0] - pts[i - 1][0])); return pts[pts.length - 1][1]; };
+  const body = cut([T0, [-560, -30], [-450, -150], [-300, -270], ...DORS, [2700, 0], [2300, 700], [1300, 760], [650, 700], [250, 600], [-20, 470], C, lipAt(2 / 3), lipAt(1 / 3)], r, { amp: 6, per: 10 });
+  const fin = new Path2D(), fr = rngFor('leviathan:fin');                 // dorsal spines, swept back, in the body's own winding so they union with it
+  for (let x = 130; x < 2300; x += 120 + 60 * fr()) { const y = edgeY(DORS, x), h = 90 + 150 * fr() * fr() + 40, w = 44 + 20 * fr(); fin.moveTo(x - w, y + 30); fin.lineTo(x + w * 1.6, y - h); fin.lineTo(x + w, y + 30); fin.closePath(); }
+  body.addPath(fin);
+  const seams = new Path2D();                                              // skin seams, running with the body between back and belly
+  for (const f of [0.12, 0.26, 0.4, 0.55, 0.7]) for (let x = 400, k = 0; x <= 2300; x += 60, k++) { const y = lerp(edgeY(DORS, x), edgeY(BELL, x), f); k ? seams.lineTo(x, y) : seams.moveTo(x, y); }
+  const gills = new Path2D(); for (let k = 0; k < 3; k++) { gills.moveTo(300 + 46 * k, -190); gills.quadraticCurveTo(372 + 46 * k, 10, 300 + 46 * k, 235); }
+  const jaw = cut([T0, lipAt(1 / 3), lipAt(2 / 3), C, [-30, 430], [-170, 500], [-380, 430], [-560, 270], [-625, 130]], r, { amp: 4, per: 10 });
+  const tooth = (s, len, w, side) => {                                    // a fang on the lip curve; side +1 hangs into the gape, -1 rises out of the jaw
+    const p = lipAt(s), q = lipAt(Math.min(1, s + 0.01)), p0 = lipAt(Math.max(0, s - 0.01));
+    let tx = q[0] - p0[0], ty = q[1] - p0[1]; const m = Math.hypot(tx, ty); tx /= m; ty /= m;
+    const nx = -ty * side, ny = tx * side;
+    return [[p[0] - tx * w, p[1] - ty * w], [p[0] + tx * w, p[1] + ty * w], [p[0] + nx * len + tx * w * 0.5, p[1] + ny * len + ty * w * 0.5]];
+  };
+  const tr = rngFor('leviathan:teeth'), up = [], lo = [];
+  for (let k = 0; k < 10; k++) { const a = tr(), b = tr(); up.push(tooth(0.06 + k * 0.096 + 0.03 * b, 40 + 130 * a * a, 12 + 8 * a, 1)); }   // uneven: a few long fangs among short ones
+  for (let k = 0; k < 8; k++) { const a = tr(), b = tr(); lo.push(tooth(0.1 + k * 0.115 + 0.03 * b, 32 + 90 * a * a, 11 + 6 * a, -1)); }
+  // Flank organs in the body frame: one per kick from bar 97 beat 2, running away from the head; rows converge
+  // toward the tail (it curves away), so the row is long and the last lights are small.
+  const org = [], q = 0.94, den = 1 - Math.pow(q, 27);
+  for (let i = 0; i < 28; i++) {
+    const u = (1 - Math.pow(q, i)) / den, t = T(97) + (i + 1) * BEAT, sz = Math.pow(q, i * 0.5);
+    const xa = 180 + 850 * u; org.push({ x: xa, y: 250 + 0.05 * xa, r: 22 * sz, ink: i % 2 ? 'pink' : 'sunflower', t, row: 0 });
+    const xb = 260 + 760 * u; org.push({ x: xb, y: 470 + 0.06 * xb, r: 12 * sz, ink: i % 2 ? 'sunflower' : 'pink', t, row: 1 });
+  }
+  // The rod (illicium): from the forehead up and over, hanging down to the jelly's apex. Final-frame coordinates.
+  const base = fs(-330, -250);
+  const ctrl = [base, [680, 330], [610, 185], [440, 105], [290, 130], [208, 220], [190, 284]];
+  const rodLine = curve(ctrl, false, 16), rodLen = [0];
+  for (let i = 1; i < rodLine.length; i++) rodLen.push(rodLen[i - 1] + Math.hypot(rodLine[i][0] - rodLine[i - 1][0], rodLine[i][1] - rodLine[i - 1][1]));
+  const rod = nib(rodLine, u => 5 * (1 - u) + 1.8, { raw: true });
+  const rodAt = u => { const d = u * rodLen[rodLen.length - 1]; let i = 1; while (i < rodLen.length - 1 && rodLen[i] < d) i++; const a = rodLen[i - 1], b = rodLen[i], f = (d - a) / (b - a || 1); return [lerp(rodLine[i - 1][0], rodLine[i][0], f), lerp(rodLine[i - 1][1], rodLine[i][1], f)]; };
+  const rodStroke = new Path2D(); rodLine.forEach((p, i) => i ? rodStroke.lineTo(p[0], p[1]) : rodStroke.moveTo(p[0], p[1]));
+  return { zEnd, O, E, th, eyeRot, J, fs, lip, C, body, jaw, up, lo, org, rod, rodAt, rodStroke, seams, gills };
+})();
+const levSway = t => { const a = phase(t, T(97), BAR); return [26 * a * Math.sin(0.9 * (t - T(97))), 20 * a * Math.sin(0.62 * (t - T(97)) + 1)]; };
+// Pull-back on kick-pulsed progress (it surges on every beat) from beat 2 of bar 97 to bar 103, then a slow creep.
+function levCam(t) {
+  const u = pulseProg(T(97) + BEAT, T(103), t), g = u * u * (3 - 2 * u);
+  const z = Math.exp(Math.log(LV.zEnd) * g) * (1 - 0.03 * phase(t, T(103), 2 * BAR));
+  return { z, fx: LV.J[0], fy: LV.J[1], ox: lerp(LV.J[0], LV.O[0], g), oy: lerp(LV.J[1], LV.O[1], g) };
+}
+function levAt(t, st) {
+  const tl = t + LEAD, ou = phase(tl, T(104), BEAT), oc = ou - 1;
+  const open = ou <= 0 ? 0 : ou >= 1 ? 1 : 1 + 2.4 * oc * oc * oc + 1.4 * oc * oc;   // easeOutBack: the lid parts, overshoots, rests
+  const L = { t, tl, vis: easeInOutCubic(phase(t, T(97) + BEAT, 3 * BAR)), open, flare: tl >= T(104) ? Math.exp(-3 * (tl - T(104)) / 0.7) : 0, gape: 0.15 + 0.08 * st.kick + 0.06 * Math.exp(-3 * Math.max(0, tl - T(104)) / 0.5) * (tl >= T(104) ? 1 : 0), pk: st.kick, lit: [], pack: null };
+  for (const o of LV.org) {
+    const age = tl - o.t; if (age < 0) continue;
+    L.lit.push({ x: o.x, y: o.y, r: o.r, ink: o.ink, I: 0.4 + 0.6 * Math.exp(-3 * age / 0.5) + 0.12 * st.kick });
+  }
+  const k = kickAt(tl), age = k ? tl - k.t : 9;                              // a light runs up the rod to the jelly on every kick
+  if (age < 0.5) { const p = LV.rodAt(easeInOutCubic(age / 0.5)); L.pack = { x: p[0], y: p[1], I: 1 - 0.5 * age / 0.5 }; }
+  return L;
+}
+
 /* Confetti: the riso grain of the reference. Specks of every fluo ink, paper-white and dark ink,
    drifting with the water at three parallax depths; they twinkle, and a share flares on the hats.
    Anchored to the world (not reseeded per frame), so the grain moves with the sea, never crawls. */
@@ -1356,6 +1422,7 @@ const SPECK_TILE = H + 600, SPECK_INKS = ['white'];
 const SPECKS = (() => { const r = rngFor('specks'), n = Math.round(420 * YS); return Array.from({ length: n }, () => ({ x: r() * W, y: r() * SPECK_TILE, par: 0.5 + r() * 0.9, sz: 1 + r() * r() * 3, ink: SPECK_INKS[Math.floor(r() * SPECK_INKS.length)], ph: r() * TAU, f: 1 + r() * 3, gate: r() })); })();
 function specksPath(g, st, ink) {
   const deep = clamp(st.dm, 0, 1.4), vis = 0.55 + 0.45 * Math.min(1, deep);   // denser as the water darkens
+  if (st.lev) { g.save(); g.setTransform(K, 0, 0, K, 0, 0); }               // pulled back: the grain stays on the screen, at canvas size
   g.beginPath();
   for (const p of SPECKS) {
     if (p.ink !== ink || p.gate > vis) continue;
@@ -1367,6 +1434,7 @@ function specksPath(g, st, ink) {
     g.rect(x - s, y - s, 2 * s, 2 * s);
   }
   g.fill();
+  if (st.lev) g.restore();
 }
 
 /* ── single creatures on the way down ──────────────────────────────────────────
@@ -1509,38 +1577,6 @@ function creatureLights(st) {
 function dotsPath(g, dots, ink, mul) { g.beginPath(); for (const d of dots) { if (ink && d.ink !== ink) continue; const r = d.r * mul; g.moveTo(d.x + r, d.y); g.arc(d.x, d.y, r, 0, TAU); } g.fill(); }
 function ghostPath(g, gh) { g.beginPath(); for (const e of gh) { g.moveTo(e.x + e.rx * Math.cos(e.rot), e.y + e.rx * Math.sin(e.rot)); g.ellipse(e.x, e.y, e.rx, e.ry, e.rot, 0, TAU); } g.fill(); }
 
-/* Inside the bell (bars 99–104), looking up into the dome: pink tissue darkening to a purple rim,
-   eight radial canals and the ring canal in florange, four gonads in sunflower on paper, the
-   swallowed fish circling in aqua; the walls contract on every kick. It opens out of the fly-in:
-   everything starts 2.6 times too large and settles over bar 99, as if the camera were still
-   braking.                                                                                     */
-const IC = [540, HC - 40];
-const innerR = st => (1 + 1.6 * (1 - easeOutCubic(phase(st.t, T(99), BAR)))) * (1 - 0.05 * st.kick);
-const IY = 0.6 + 0.4 * YS;                                // the chamber is taller in 9:16
-function canals(g, st) {
-  const R = innerR(st); g.lineCap = 'round'; g.lineWidth = (24 + 12 * st.kick) * R;
-  g.beginPath();
-  for (let j = 0; j < 8; j++) {
-    const a = j / 8 * TAU + 0.12 * Math.sin(st.t * 0.4);
-    g.moveTo(IC[0] + Math.cos(a) * 70 * R, IC[1] + Math.sin(a) * 70 * R * IY);
-    g.quadraticCurveTo(IC[0] + Math.cos(a + 0.3) * 330 * R, IC[1] + Math.sin(a + 0.3) * 330 * R * IY, IC[0] + Math.cos(a + 0.45) * 1100 * R, IC[1] + Math.sin(a + 0.45) * 1100 * R * IY);
-  }
-  g.stroke();
-  g.lineWidth = (28 + 18 * st.kick) * R; g.beginPath(); g.ellipse(IC[0], IC[1], 470 * R, 442 * R * IY, 0, 0, TAU); g.stroke();
-}
-function rimShade(g, st, r) { const R = innerR(st); g.beginPath(); g.rect(-60, -60, W + 120, H + 120); g.ellipse(IC[0], IC[1], r * R, r * R * 0.94 * IY, 0, 0, TAU); g.fill('evenodd'); }
-function gonadsIn(g, st) {
-  const R = innerR(st), sw = 1 + 0.14 * st.kick;
-  g.beginPath();
-  for (let j = 0; j < 4; j++) {
-    const a = j / 4 * TAU + Math.PI / 4 + 0.05 * (st.t - T(99)), c = Math.cos(a), s = Math.sin(a), L = 230 * R * sw, w = 72 * R * sw, x0 = IC[0] + c * 60 * R, y0 = IC[1] + s * 60 * R;
-    const P = (u, v) => [x0 + c * u - s * v, y0 + s * u + c * v];
-    const p0 = P(0, 0), a1 = P(L * 0.3, -w), a2 = P(L, -w * 0.8), e = P(L, 0), b1 = P(L, w * 0.8), b2 = P(L * 0.3, w);
-    g.moveTo(p0[0], p0[1]); g.bezierCurveTo(a1[0], a1[1], a2[0], a2[1], e[0], e[1]); g.bezierCurveTo(b1[0], b1[1], b2[0], b2[1], p0[0], p0[1]); g.closePath();
-  }
-  g.fill();
-}
-
 /* ── fast plates ──────────────────────────────────────────────────────────────
    Every band paints its coverage as alpha into one map, and one pixel loop screens the whole map
    against the canvas-anchored dot tile. Because the map is continuous, a band may paint a
@@ -1608,6 +1644,7 @@ function stateAt(t) {
   const sub = subAt(t), held = 1 - phase(t, T(97), BEAT);          // no wobble once the jelly has it
   const thrust = kick * (p.id === 'introA' ? 0.3 : 1) * held;
   sub.x += (Math.cos(sub.a) * 7 * thrust + 5 * Math.sin(t * 0.7)) * held; sub.y += (Math.sin(sub.a) * 7 * thrust + 6 * Math.sin(t * 1.1 + 1)) * held;
+  if (t > T(97)) { const sw = levSway(t); sub.x += sw[0]; sub.y += sw[1]; }   // the sub rides in the swaying bell
   // Lamp: on in the water, flickers through the transition, kicks brighter.
   let lamp = clamp(sub.dive * 1.4, 0, 1);
   if (p.id === 'trans') lamp *= 0.75 + 0.25 * (rngFor('flick' + Math.floor(t * 12))() > 0.3 ? 1 : 0);
@@ -1619,17 +1656,17 @@ function stateAt(t) {
   const jel = jellyAt(t);
   const rise = p.id === 'breakdown' ? phase(t, T(68), 4 * BAR) ** 0.8 : 0;   // riser tension: tracking band
   const st = { t, p, S, k, kick, bass, hat, dm, sub, lamp, flare, rise, jel, jx: jel ? jel.x : 0, jy: jel ? jel.y : 0,
-               surf: SURF0 - S, drop: t + LEAD >= T(73), inside: t >= T(99) };
-  // Camera: identity until bar 97, then it flies in with the sub (the sub keeps its screen size).
-  const f = subAt(T(97)), zu = phase(t, T(97), 2 * BAR), ez = easeInOutCubic(zu);
-  st.cam = t < T(97) || st.inside ? { z: 1, fx: 0, fy: 0, ox: 0, oy: 0 } : { z: 1 + 11 * zu ** 3, fx: f.x, fy: f.y, ox: lerp(f.x, 540, ez), oy: lerp(f.y, HC, ez) };
+               surf: SURF0 - S, drop: t + LEAD >= T(73) };
+  // Camera: identity until bar 97, then it pulls back from the swallowed sub (bars 97-103); the sub shrinks with the world.
+  st.cam = t < T(97) ? { z: 1, fx: 0, fy: 0, ox: 0, oy: 0 } : levCam(t);
   const c = st.cam;
-  st.subS = st.inside ? { x: 540 + 25 * Math.sin(0.5 * (t - T(99))), y: HC + 18 * Math.sin(0.7 * (t - T(99))), a: f.a + 0.12 * Math.sin(0.3 * (t - T(99))) }
-                      : { x: c.ox + (sub.x - c.fx) * c.z, y: c.oy + (sub.y - c.fy) * c.z, a: sub.a };
-  st.school = st.inside ? innerFish(st) : schoolAt(t, st);   // fills SX/SY/SR/SI for this frame
+  st.zk = c.z;
+  st.subS = { x: c.ox + (sub.x - c.fx) * c.z, y: c.oy + (sub.y - c.fy) * c.z, a: sub.a };
+  st.school = schoolAt(t, st);   // fills SX/SY/SR/SI for this frame
   st.manta = mantaAt(t); st.angler = anglerAt(t); st.siph = siphAt(t); st.combs = combsAt(t);
-  st.fish = st.inside ? [] : FISHES.map(f => fishAt(f, st)).filter(Boolean);
+  st.fish = FISHES.map(f => fishAt(f, st)).filter(Boolean);
   Object.assign(st, creatureLights(st));
+  st.lev = t >= T(97) ? levAt(t, st) : null;
   return st;
 }
 
@@ -1643,7 +1680,10 @@ function belowSurface(g, st) {                          // clip to the sea
 function water(g, st, name) {
   const gr = g.createLinearGradient(0, Math.max(0, st.surf), 0, H);
   for (let k = 0; k <= 8; k++) gr.addColorStop(k / 8, `rgba(0,0,0,${waterCov(name, k / 8, st.dm).toFixed(3)})`);
-  g.save(); belowSurface(g, st); g.fillStyle = gr; g.fillRect(-60, -60, W + 120, H + 120); g.restore();
+  g.save();
+  if (st.lev) { g.setTransform(K, 0, 0, K, 0, 0); g.fillStyle = gr; g.fillRect(-60, -60, W + 120, H + 120); }   // pulled back: the sea fills the frame, not just the old world rect
+  else { belowSurface(g, st); g.fillStyle = gr; g.fillRect(-60, -60, W + 120, H + 120); }
+  g.restore();
 }
 function sky(g, st) {                                    // dusk sky: darkest at the top, opening to the horizon
   if (st.surf < -20) return;
@@ -1709,7 +1749,7 @@ const coral = (g, st, ink) => coralEach(st, ink, coralShape)(g);
 // The sub: slim and small, a dark hull with an aqua rim light, a dome window and a lamp in the nose.
 // Drawn in screen space at st.subS, so it keeps its size while the camera flies in.
 const SUBK = 1.25;
-function subFrame(g, st) { const { x, y, a } = st.subS; g.setTransform(K, 0, 0, K, 0, 0); g.translate(x, y); g.rotate(a); g.scale(SUBK, SUBK); }
+function subFrame(g, st) { const { x, y, a } = st.subS; g.setTransform(K, 0, 0, K, 0, 0); g.translate(x, y); g.rotate(a); g.scale(SUBK * st.zk, SUBK * st.zk); }
 function subBody(g, st) {
   g.save(); subFrame(g, st);
   g.beginPath(); g.ellipse(0, 0, 58, 17, 0, 0, TAU); g.fill();                        // hull
@@ -1728,10 +1768,10 @@ function subRim(g, st) {                                 // light catching the t
 function subStripe(g, st) { g.save(); subFrame(g, st); g.beginPath(); g.roundRect(-40, 3, 70, 4, 2); g.fill(); g.restore(); }
 function subWindow(g, st) { g.save(); subFrame(g, st); g.beginPath(); g.ellipse(40, -3, 10, 8, 0, 0, TAU); g.fill(); g.restore(); }
 function subLampDot(g, st) { g.save(); subFrame(g, st); g.beginPath(); g.arc(57, 1, 5, 0, TAU); g.fill(); g.restore(); }
-function nose(st) { const { x, y, a } = st.subS; return [x + Math.cos(a) * 56 * SUBK, y + Math.sin(a) * 56 * SUBK, a]; }
+function nose(st) { const { x, y, a } = st.subS; return [x + Math.cos(a) * 56 * SUBK * st.zk, y + Math.sin(a) * 56 * SUBK * st.zk, a]; }
 // The lamp beam as a dithered radial ramp inside a cone; spread widens it, soft beams go further.
 function beam(g, st, a0, spread, reach) {
-  const [nx, ny, a] = nose(st), R = reach * (0.85 + 0.2 * st.kick), h = 0.28 * spread;
+  const [nx, ny, a] = nose(st), R = reach * st.zk * (0.85 + 0.2 * st.kick), h = 0.28 * spread;
   g.save(); g.setTransform(K, 0, 0, K, 0, 0);
   const gr = g.createRadialGradient(nx, ny, 0, nx, ny, R); gr.addColorStop(0, `rgba(0,0,0,${a0})`); gr.addColorStop(0.2, `rgba(0,0,0,${a0 * 0.7})`); gr.addColorStop(0.55, `rgba(0,0,0,${a0 * 0.25})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = gr; g.beginPath(); g.moveTo(nx, ny); g.arc(nx, ny, R, a - h, a + h); g.closePath(); g.fill();
@@ -1844,7 +1884,7 @@ function oralArms(g, st) {                               // four frilled ribbons
   }
 }
 function jellies(g, st, fn) {                           // the jelly at its size and heading, as scaled vectors
-  if (!st.jel || st.inside) return;
+  if (!st.jel) return;
   g.save(); g.translate(st.jx, st.jy); g.rotate(st.jel.a); g.scale(st.jel.s, st.jel.s); g.translate(-st.jx, -st.jy); fn(g, st); g.restore();
 }
 function jellySil(g, st) { jellyBell(g, st); tentacles(g, st); oralArms(g, st); }
@@ -1907,6 +1947,7 @@ function backgroundPlate(name, st) {
     bands.push({ lift: 1, draw: g => st.lights.forEach(d => { glowFill(g, d.x, d.y, d.r * 5, 0.7); g.beginPath(); g.arc(d.x, d.y, d.r * 5, 0, TAU); g.fill(); }) });
     bands.push({ coverage: 0, draw: g => dotsPath(g, st.lights, null, 1) });
   }
+  if (st.lev) levBands(name, st, bands);                  // the leviathan behind the jelly: dark overprints, lit organs, the eye
   if (st.jel) {                                           // the jelly's glow opening the water, then its body
     bands.push({ lift: 1, draw: g => jellies(g, st, (g, s) => { glowFill(g, s.jx, s.jy - 80, 820, 0.7, 0.4); g.beginPath(); g.arc(s.jx, s.jy - 80, 820, 0, TAU); g.fill(); }) });
     bands.push({ coverage: 0, draw: g => jellies(g, st, jellySil) });
@@ -1923,23 +1964,107 @@ function backgroundPlate(name, st) {
   fastBandPass(ctx, name, {}, bands);
 }
 
-function interiorPlates(st) {
-  const sc = st.school, knock = g => { schoolPath(g, sc, -1, 1); gonadsIn(g, st); subRim(g, st); subWindow(g, st); subLampDot(g, st); subStripe(g, st); };
-  const all = g => g.fillRect(-60, -60, W + 120, H + 120);
-  const lamp = [{ lift: 0.45 * st.lamp, draw: g => beam(g, st, 1, 1.5, 950) }, { lift: 0.8 * st.lamp, draw: g => beam(g, st, 1, 0.7, 700) }];
-  const hull = c => ({ coverage: c, draw: g => subBody(g, st) });
-  fastBandPass(ctx, 'pink', {}, [{ coverage: 0.58, draw: all }, ...lamp, { lift: 0.4, draw: g => schoolPath(g, sc, -1, 2.2) }, hull(0.4), { coverage: 0, draw: knock }]);
-  fastBandPass(ctx, 'indigo', {}, [{ coverage: 0.14, draw: all }, { coverage: 0.3, draw: g => rimShade(g, st, 330) }, { coverage: 0.48, draw: g => rimShade(g, st, 470) }, { coverage: 0.68, draw: g => rimShade(g, st, 620) },
-    ...lamp, { lift: 0.3, draw: g => schoolPath(g, sc, -1, 2.2) }, hull(0.95), { coverage: 0, draw: knock }]);
-  fastBandPass(ctx, 'sunflower', {}, [{ coverage: 0.75, draw: g => canals(g, st) }, { coverage: 0, draw: g => { knock(g); subBody(g, st); } }]);
-  inkPass(ctx, 'sunflower', {}, g => gonadsIn(g, st));
+/* Leviathan drawing. levG: final-frame coordinates hung on the jelly; levB: the body frame (origin on the
+   eye, x toward the tail, y toward the belly, rotated LV.th); levEye: the eye frame, turned back upright. */
+const levG = (g, fn) => { g.save(); g.translate(LV.J[0], LV.J[1]); g.scale(1 / LV.zEnd, 1 / LV.zEnd); g.translate(-LV.O[0], -LV.O[1]); fn(g); g.restore(); };
+const levB = (g, fn) => levG(g, g => { g.translate(LV.E[0], LV.E[1]); g.rotate(LV.th); fn(g); });
+const levEye = (g, fn) => levB(g, g => { g.rotate(LV.eyeRot); fn(g); });
+const jawFrame = (g, gape) => { g.translate(LV.C[0], LV.C[1]); g.rotate(-gape); g.translate(-LV.C[0], -LV.C[1]); };
+const EYE = { rx: 250, ry: 215, ir: 205, prx: 56, pry: 112 };
+const almond = (g, rx, ry) => { g.moveTo(-rx, 0); g.bezierCurveTo(-rx * 0.55, -ry * 1.35, rx * 0.55, -ry * 1.35, rx, 0); g.bezierCurveTo(rx * 0.55, ry * 1.3, -rx * 0.55, ry * 1.3, -rx, 0); g.closePath(); };
+const eyeRy = L => Math.max(14, EYE.ry * L.open);           // shut: a hairline lid
+function eyeShape(g, L) {                                    // the iris disc, cut by the lids
+  g.save(); g.beginPath(); almond(g, EYE.rx, eyeRy(L)); g.clip(); g.beginPath(); g.arc(0, 0, EYE.ir, 0, TAU); g.fill(); g.restore();
+}
+function eyeClip(g, L, fn) { g.save(); g.beginPath(); almond(g, EYE.rx, eyeRy(L)); g.clip(); fn(g); g.restore(); }
+const pupilPath = (g, L) => { g.beginPath(); g.ellipse(0, 0, EYE.prx * (1 + 0.1 * L.pk), EYE.pry * (1 + 0.07 * L.pk), 0, 0, TAU); };
+const glintPath = g => { g.beginPath(); g.ellipse(-92, -100, 36, 24, -0.6, 0, TAU); g.moveTo(80 + 12, 76); g.arc(80, 76, 12, 0, TAU); };
+function wedge(g, gape) {                                    // the mouth's inside: between the upper lip and the dropped lower lip
+  const C = LV.C, cg = Math.cos(gape), sg = Math.sin(gape);
+  g.beginPath();
+  LV.lip.forEach((p, k) => k ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]));
+  for (let k = LV.lip.length - 1; k >= 0; k--) { const dx = LV.lip[k][0] - C[0], dy = LV.lip[k][1] - C[1]; g.lineTo(C[0] + dx * cg + dy * sg, C[1] - dx * sg + dy * cg); }
+  g.closePath(); g.fill();
+}
+function fangs(g, list, tv) {                                // triangles; the tips grow with the dark that reveals the jaw
+  g.beginPath();
+  for (const [a, b, c] of list) { const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2; g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.lineTo(mx + (c[0] - mx) * tv, my + (c[1] - my) * tv); g.closePath(); }
+  g.fill();
+}
+const levDotR = d => d.r * (0.7 + 0.5 * Math.min(1, d.I));
+const LEVO = { blue: 0.5, indigo: 0.55, pink: 0.5 };         // how much each sea plate darkens the body
+function levBands(name, st, bands) {
+  const L = st.lev, v = L.vis, o = LEVO[name], tv = clamp((v - 0.4) / 0.6, 0, 1), isPink = name === 'pink';
+  const tone = (a, draw) => { if (a > 0.001) bands.push({ over: a, draw }); };
+  tone(o * v, g => levB(g, g => g.fill(LV.body)));
+  tone(0.2 * v, g => levB(g, g => { const gr = g.createLinearGradient(-600, 0, 1500, 0); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,1)'); g.fillStyle = gr; g.fill(LV.body); }));   // darker toward the tail
+  tone(0.28 * v, g => levB(g, g => { jawFrame(g, L.gape); g.fill(LV.jaw); }));
+  tone(0.28 * v, g => levEye(g, g => { g.beginPath(); g.ellipse(0, 0, 330, 290, 0, 0, TAU); g.fill(); }));   // the socket
+  tone(0.8 * v, g => levB(g, g => wedge(g, L.gape)));
+  tone(0.85, g => levG(g, g => g.fill(LV.rod)));
+  if (v > 0.02) bands.push({ lift: 0.2 * v, draw: g => levB(g, g => { g.lineWidth = 3; g.lineCap = 'round'; g.setLineDash([150, 50, 40, 50]); g.stroke(LV.seams); g.setLineDash([]); g.lineWidth = 7; g.stroke(LV.gills); }) });
+  // lights lift the dark around them, then paper
+  if (L.lit.length) bands.push({ lift: 1, draw: g => levB(g, g => L.lit.forEach(d => { const R = d.r * 6; glowFill(g, d.x, d.y, R, 0.8 * d.I, 0.3); g.beginPath(); g.arc(d.x, d.y, R, 0, TAU); g.fill(); })) });
+  if (L.pack) bands.push({ lift: 1, draw: g => levG(g, g => { const p = L.pack; glowFill(g, p.x, p.y, 42, 0.9 * p.I, 0.3); g.beginPath(); g.arc(p.x, p.y, 42, 0, TAU); g.fill(); }) });
+  if (L.flare > 0.02) for (const [R, a] of [[780, 0.9], [430, 1]]) bands.push({ lift: 1, draw: g => levEye(g, g => { glowFill(g, 0, 0, R, a * L.flare, 0.4); g.beginPath(); g.arc(0, 0, R, 0, TAU); g.fill(); }) });
+  if (tv > 0.02) bands.push({ coverage: 0, draw: g => levB(g, g => { fangs(g, LV.up, tv); g.save(); jawFrame(g, L.gape); fangs(g, LV.lo, tv); g.restore(); }) });
+  bands.push({ coverage: 0, draw: g => levG(g, g => {
+    g.lineWidth = 4.6; g.stroke(LV.rodStroke);                 // the rod carries a line of paper
+    if (L.pack) { g.beginPath(); g.arc(L.pack.x, L.pack.y, 9, 0, TAU); g.fill(); }
+  }) });
+  if (L.lit.length) bands.push({ coverage: 0, draw: g => levB(g, g => { g.beginPath(); for (const d of L.lit) { const r = levDotR(d) * 1.12; g.moveTo(d.x + r, d.y); g.arc(d.x, d.y, r, 0, TAU); } g.fill(); }) });
+  // the lids: a line of paper, shut or open
+  const lidW = tv * (0.3 + 0.7 * clamp(L.open * 3, 0, 1));                 // shut, the lid is a fine crease; open, a lit rim
+  if (lidW > 0.02) bands.push({ coverage: 0, draw: g => levEye(g, g => { g.lineWidth = 11 * lidW; g.beginPath(); almond(g, EYE.rx, eyeRy(L)); g.stroke(); }) });
+  if (L.open > 0.02) {
+    bands.push({ coverage: 0, draw: g => levEye(g, g => eyeShape(g, L)) });                   // the iris is paper
+    if (isPink) {                                                                              // warm shading only: pink over the yellow prints orange-red
+      bands.push({ over: 0.65, draw: g => levEye(g, g => { const gr = g.createLinearGradient(0, -EYE.ir, 0, 0); gr.addColorStop(0, 'rgba(0,0,0,1)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; eyeShape(g, L); }) });   // the upper lid's shadow
+      bands.push({ over: 0.9, draw: g => levEye(g, g => eyeClip(g, L, g => { g.lineWidth = 26; g.beginPath(); g.arc(0, 0, EYE.ir - 12, 0, TAU); g.stroke(); })) });   // limbal ring
+      bands.push({ over: 0.5, draw: g => levEye(g, g => eyeClip(g, L, g => { g.lineWidth = 3.4; g.beginPath(); for (let k = 0; k < 44; k++) { const a = k / 44 * TAU + 0.07 * (k % 3), c = Math.cos(a), s = Math.sin(a); g.moveTo(c * 100, s * 100); g.lineTo(c * (EYE.ir - 26), s * (EYE.ir - 26)); } g.stroke(); })) });
+    }
+    bands.push({ over: 0.9, draw: g => levEye(g, g => eyeClip(g, L, g => { pupilPath(g, L); g.fill(); })) });   // the pupil
+    bands.push({ coverage: 0, draw: g => levEye(g, g => eyeClip(g, L, g => { glintPath(g); g.fill(); })) });    // a glint of paper
+  }
+}
+function drawLev(st) {
+  const L = st.lev, tv = clamp((L.vis - 0.4) / 0.6, 0, 1);
+  // Flank organs and the light on the rod: each ink on its paper inside a bloom of itself.
+  for (const ink of ['sunflower', 'pink']) {
+    const mine = L.lit.filter(d => d.ink === ink), other = L.lit.filter(d => d.ink !== ink);
+    if (mine.length) {
+      fastBandPass(ctx, ink, {}, [{ coverage: 1, draw: g => levB(g, g => mine.forEach(d => { const R = d.r * 4.2; glowFill(g, d.x, d.y, R, 0.42 * d.I); g.beginPath(); g.arc(d.x, d.y, R, 0, TAU); g.fill(); })) },
+        { coverage: 0, draw: g => levB(g, g => { g.beginPath(); other.forEach(d => { const r = levDotR(d) * 1.2; g.moveTo(d.x + r, d.y); g.arc(d.x, d.y, r, 0, TAU); }); g.fill(); }) }]);
+      inkPass(ctx, ink, {}, g => levB(g, g => { g.beginPath(); mine.forEach(d => { const r = levDotR(d); g.moveTo(d.x + r, d.y); g.arc(d.x, d.y, r, 0, TAU); }); g.fill(); }));
+    }
+  }
+  inkPass(ctx, 'pink', {}, g => levG(g, g => { g.lineWidth = 2.4; g.lineCap = 'round'; g.stroke(LV.rodStroke); }));
+  if (L.pack) {
+    const p = L.pack;
+    fastBandPass(ctx, 'sunflower', {}, [{ coverage: 1, draw: g => levG(g, g => { glowFill(g, p.x, p.y, 30, 0.5 * p.I); g.beginPath(); g.arc(p.x, p.y, 30, 0, TAU); g.fill(); }) }]);
+    inkPass(ctx, 'sunflower', {}, g => levG(g, g => { g.beginPath(); g.arc(p.x, p.y, 8 * p.I + 3, 0, TAU); g.fill(); }));
+  }
+  // The lids, and once open the eye: sunflower iris with a pink limbal ring (orange), a dark pupil, a glint.
+  const lidW = tv * (0.3 + 0.7 * clamp(L.open * 3, 0, 1));
+  if (lidW > 0.02) {
+    inkPass(ctx, 'sunflower', {}, g => levEye(g, g => { g.lineWidth = 9 * lidW; g.beginPath(); almond(g, EYE.rx, eyeRy(L)); g.stroke(); }));
+    inkPass(ctx, 'pink', {}, g => levEye(g, g => { g.lineWidth = 4.5 * lidW; g.beginPath(); almond(g, EYE.rx, eyeRy(L)); g.stroke(); }));
+  }
+  if (L.open > 0.02 || L.flare > 0.02) {
+    const bands = [];
+    if (L.flare > 0.02) bands.push({ coverage: 1, draw: g => levEye(g, g => { glowFill(g, 0, 0, 420, 0.55 * L.flare, 0.3); g.beginPath(); g.arc(0, 0, 420, 0, TAU); g.fill(); }) });
+    if (L.open > 0.02) {
+      bands.push({ coverage: 0.95, draw: g => levEye(g, g => { const gr = g.createRadialGradient(0, 0, 40, 0, 0, EYE.ir); gr.addColorStop(0, 'rgba(0,0,0,0.6)'); gr.addColorStop(0.45, 'rgba(0,0,0,1)'); gr.addColorStop(1, 'rgba(0,0,0,1)'); g.fillStyle = gr; eyeShape(g, L); }) });
+      bands.push({ coverage: 0, draw: g => levEye(g, g => eyeClip(g, L, g => { pupilPath(g, L); g.fill(); glintPath(g); g.fill(); })) });
+    }
+    fastBandPass(ctx, 'sunflower', {}, bands);
+  }
 }
 
 function drawArt(t) {
   const st = stateAt(t);
   CAM = st.cam;
-  if (st.inside) interiorPlates(st);
-  else drawSea(st);
+  drawSea(st);
 
   // The school: fluo dots on their paper, each ink inside a faint halo of itself.
   if (st.school) SCH_INKS.forEach((ink, k) => {
@@ -1954,16 +2079,14 @@ function drawArt(t) {
   if (st.lamp > 0.02) {
     fastBandPass(ctx, 'sunflower', {}, [{ coverage: Math.min(1, 0.9 * st.lamp + 0.3 * st.flare), draw: g => beam(g, st, 1, 0.55 + 0.4 * st.flare, 520) }, { coverage: 1, draw: g => subLampDot(g, st) },
       { coverage: 0, draw: g => { subBody(g, st); if (st.school) schoolPath(g, st.school, -1, 1); if (st.angler) anglerBody(g, st.angler); } }, { coverage: 1, draw: g => subLampDot(g, st) }]);
-    fastBandPass(ctx, 'pink', {}, [{ coverage: 0.5 * st.lamp, draw: g => { const [x, y] = nose(st); g.setTransform(K, 0, 0, K, 0, 0); glowFill(g, x, y, 90, 1, 0.3); g.beginPath(); g.arc(x, y, 90, 0, TAU); g.fill(); } },
+    fastBandPass(ctx, 'pink', {}, [{ coverage: 0.5 * st.lamp, draw: g => { const [x, y] = nose(st); g.setTransform(K, 0, 0, K, 0, 0); glowFill(g, x, y, 90 * st.zk, 1, 0.3); g.beginPath(); g.arc(x, y, 90 * st.zk, 0, TAU); g.fill(); } },
       { coverage: 0, draw: g => subBody(g, st) }]);
   }
 
   // Sonar, confetti and bubbles over paper.
-  if (!st.inside) {
-    inkPass(ctx, 'blue', { alpha: 0.2 }, g => { g.strokeStyle = '#000'; rings(g, st, false); });
-    if (st.drop) inkPass(ctx, 'pink', {}, g => { g.strokeStyle = '#000'; rings(g, st, true); });
-    inkPass(ctx, 'blue', { alpha: 0.5 }, g => { g.strokeStyle = '#000'; g.lineWidth = 1.6; bubbles(g, st, true); });
-  }
+  inkPass(ctx, 'blue', { alpha: 0.2 }, g => { g.strokeStyle = '#000'; rings(g, st, false); });
+  if (st.drop) inkPass(ctx, 'pink', {}, g => { g.strokeStyle = '#000'; rings(g, st, true); });
+  inkPass(ctx, 'blue', { alpha: 0.5 }, g => { g.strokeStyle = '#000'; g.lineWidth = 1.6; bubbles(g, st, true); });
   CAM = { z: 1, fx: 0, fy: 0, ox: 0, oy: 0 };
   // Drop flash.
   const dropAge = t + LEAD - T(73), flash = dropAge >= 0 && dropAge < 1.2 ? Math.exp(-dropAge * 3.5) : 0;
@@ -1973,10 +2096,10 @@ function drawArt(t) {
   const k = st.k, inDrop = st.p.id === 'drop' || st.p.id === 'outro';
   // Tears escalate in 8-bar steps: every 4th bar, then every bar, then every bar harder; the outro calms back.
   const every = k && (k.bar >= 81 && k.bar <= 96 ? 1 : 4), hard = k && k.bar >= 89 && k.bar <= 96;
-  const tear = inDrop && k && k.down && k.age < 0.13 && (k.bar - 1) % every === 0 ? (k.bar % 8 === 1 ? 0.8 : hard ? 0.5 : 0.3) : 0;
+  const tear = inDrop && k && k.down && k.age < 0.13 && ((k.bar - 1) % every === 0 || k.bar === 104) ? (k.bar % 8 === 1 || k.bar === 104 ? 0.8 : hard ? 0.5 : 0.3) : 0;
   // The print is the picture (as in roost); the tape is a light touch, and only the drop tears it.
   vhs(ctx, t, {
-    chroma: 0.6 + (inDrop ? 3 : 0) * st.kick + 10 * flash,
+    chroma: 0.6 + (inDrop ? 3 : 0) * st.kick + 10 * flash + (st.lev ? 8 * st.lev.flare : 0),
     track: clamp((st.p.id === 'trans' ? 0.35 : 0) + st.rise * 0.6, 0, 1),
     glitch: Math.max(tear, flash),
     glitchKey: k ? k.i : 0,
@@ -2004,6 +2127,8 @@ function drawSea(st) {
     fastBandPass(ctx, ink, {}, [{ coverage: 1, draw: g => st.lights.filter(d => d.ink === ink).forEach(d => { glowFill(g, d.x, d.y, d.r * 4, 0.35); g.beginPath(); g.arc(d.x, d.y, d.r * 4, 0, TAU); g.fill(); }) }]);
     inkPass(ctx, ink, {}, g => dotsPath(g, st.lights, ink, 1));
   }
+
+  if (st.lev) drawLev(st);
 
   // Jelly: a magenta bloom, the bell deepening to its rim, tentacles and arms in solid pink with
   // florange highlights, and a hot rim light of sunflower over the pink (it prints orange).

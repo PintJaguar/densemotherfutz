@@ -178,7 +178,7 @@ Nebenbei gefunden und behoben:
 - Lampenkegel druckte im Tiefwasser braun (Sunflower über Überdruck): die fernen Bänder blenden mit der
   Tiefe aus. Die Lampe dimmt ab Takt 65 nicht mehr, sie fällt erst in Takt 72 aus.
 
-## Runde 3 (2026-09-26, Nutzer-Feedback auf den Probe): ganzer Film
+## Runde 3 (2026-09-26, Nutzer-Feedback auf den Probe): ganzer Film (Schluss ab Takt 97 durch Runde 7 ersetzt)
 
 Ersetzt Blackout und Verscheuchen aus Runde 2 und den alten Drop/Schluss.
 
@@ -322,6 +322,36 @@ den Lampen-Bändern, bleibt also auch im Kegel Silhouette, und ist aus dem gelbe
 
 Geprüft: `verify.mjs` grün; Stills 540 bei 52–81,5 s und um jeden Stab angesehen.
 Nicht geprüft: Timing mit Ton (ich kann das Video nicht abspielen).
+
+## Runde 7 (2026-10-01): neues Ende „Der Größere“
+
+Nutzer: Das Ende „die Qualle frisst das U-Boot und wir fliegen mit in den Mund“ sieht schlecht aus. Vier
+Enden wurden parallel als Varianten gebaut (je eine Kopie in `films/_end-*`, 540er-Probe 165–192 s mit Ton):
+Implosion, Der Größere, Der letzte Ping, Grund erreicht. Gewählt: **Der Größere**. Flug ins Innere und
+Innenraum (`interiorPlates`, `innerFish`, Kanäle, Gonaden) sind entfernt.
+
+| Zeit | Bild |
+|---|---|
+| Takt 93–96 (169,90–177,28) | unverändert: Qualle wendet sich dem Boot zu, Glocke schließt sich auf Takt 97 |
+| ab Takt 97, Schlag 2 | Kamera zieht zurück (`levCam`, Zoom 1 → 0,26 bis Takt 103, auf der Kick getaktet). Qualle und Boot schrumpfen; die Qualle hängt an einer Angel, ein Lichtpaket läuft auf jeder Kick die Angel hinunter |
+| Takt 98–102 | der Riese taucht als dunkler Überdruck der drei Meerplatten auf: Zähne auf Papier, Kiefer klafft auf der Kick, Rückenstacheln, Hautnähte, Kiemen; zwei Reihen Flankenorgane gehen einzeln auf der Kick an (Pink/Sunflower) |
+| Takt 104 (190,21) | das Auge öffnet sich über einen Schlag (Iris Sunflower mit Pink-Ring = orange, dunkle Pupille, Glanzlicht), Blitz und VHS-Tear; harter Schluss bei 192,00 |
+
+Code: Block `LV` (Geometrie im Koordinatensystem des Endbilds, per `levG` an die Qualle gehängt), `levSway`,
+`levCam`, `levAt`, `levBands` (Meerplatten), `drawLev` (Tinten). Boot und Lampe skalieren mit `st.zk`; `water()`
+und die Schwebeteilchen liegen im Zoom-Out im Bildschirmraum.
+
+Geprüft:
+- Stills der übernommenen Fassung bytegleich mit der Variante bei 150–191,8 s.
+- Bei 150 und 170 s bytegleich mit dem Stand vorher, die 1080er-Stücke 0–48 s bleiben gültig.
+- `verify.mjs` grün (2 von 3 Läufen; ein Lauf meldete „t=0 not repeatable“ in unverändertem Code, wie zwei
+  Agenten unter Last an anderen Stellen; vermutlich Last/GPU, nicht belegt).
+- Probe-Video der Variante vom Nutzer angesehen.
+
+Offen laut Agent: Unterkiefer dunkel auf dunkel, Zähne erscheinen um 180,6 s etwas vor dem Körper,
+Rückenstacheln großteils außerhalb, Lidkontur leicht eckig.
+
+Hinweis: Takt 93 beginnt bei 169,90 s (nicht 171,66 s, wie in der Variantenvorgabe verrechnet).
 
 ## Voll-Render (2026-09-26, erste Fassung, 1:1; veraltet)
 
