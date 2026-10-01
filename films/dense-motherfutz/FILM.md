@@ -353,6 +353,18 @@ Rückenstacheln großteils außerhalb, Lidkontur leicht eckig.
 
 Hinweis: Takt 93 beginnt bei 169,90 s (nicht 171,66 s, wie in der Variantenvorgabe verrechnet).
 
+**Voll-Render `out/dense-motherfutz-9x16.mp4`** (Stand `164f95a`): 1080×1920, 30 fps, 192,00 s, H.264 + AAC
+48 kHz, 1,36 GB. In Stücken über `probe.mjs` gerendert (`out/seg-9x16-<start>.mp4`: 0–64 s je 16 s, ab 64 s je
+8 s), Frames gezählt (5760), per ffmpeg-concat verkettet und einmal mit `track.wav` gemuxt. Wer später nur ein
+spätes Stück ändert, rendert nur die betroffenen Stücke neu und verkettet erneut. Helligkeit jede Sekunde:
+142 im Intro, 150 im Flachwasser, fällt stetig auf ~75–83 im Drop, 119 beim Blend-Blitz (74 s), 58–64 im
+Zoom-Out, 69 beim Augen-Blitz; keine Einbrüche.
+
+Render-Umgebung: Lange Node-Prozesse wurden in dieser Sandbox mehrfach ohne Meldung beendet (Exit 255, kein
+Eintrag im Windows-Protokoll, kein Speichermangel). Stabil liefen Vordergrund-Aufrufe von ~3 min (8-s-Stücke,
+drei Prozesse). Prozesse außerhalb der Sandbox (WMI-Start) sehen die Playwright-Browser nicht, weil diese in der
+Sandbox installiert wurden.
+
 ## Voll-Render (2026-09-26, erste Fassung, 1:1; veraltet)
 
 `out/dense-motherfutz.mp4`: 192,00 s, 5760 Frames, 1080², H.264 + AAC. In sechs 32-s-Stücken
